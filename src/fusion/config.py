@@ -15,8 +15,9 @@ class Config:
     seed: int = 42
 
     # --- Épisodes ---
-    n_episodes: int = 40
-    episode_seconds: float = 15.0
+    n_episodes: int = 60
+    target_frames: int = 60            # frames sauvegardées par épisode (5 Hz, soit 12 s de conduite)
+    max_episode_seconds: float = 40.0  # arrêt même si la cible n'est pas atteinte (ego bloqué)
     warmup_seconds: float = 3.0      # laisser le trafic se mettre en place
     n_npc: int = 70
     min_ego_speed: float = 0.5       # m/s ; en dessous, la frame est ignorée (doublons à l'arrêt)

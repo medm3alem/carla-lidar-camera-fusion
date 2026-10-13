@@ -60,6 +60,7 @@ def run_episode(client, world, tm, weather, ep, out_dir, K):
             raise RuntimeError("impossible de placer l'ego")
         actors.append(ego)
         ego.set_autopilot(True, CFG.tm_port)
+        tm.ignore_lights_percentage(ego, 100)
 
         npc_bps = [b for b in bpl.filter("vehicle.*")
                    if int(b.get_attribute("number_of_wheels")) == 4]
@@ -79,7 +80,7 @@ def run_episode(client, world, tm, weather, ep, out_dir, K):
         for _ in range(3):
             world.tick()
 
-        n_ticks = int(CFG.episode_seconds / CFG.dt)
+        n_ticks = int(CFG.max_episode_seconds / CFG.dt)
         frames, k, n_stopped, n_missed = [], 0, 0, 0
         ego_dist, prev = 0.0, ego.get_location()
         for i in range(1, n_ticks + 1):
@@ -113,6 +114,8 @@ def run_episode(client, world, tm, weather, ep, out_dir, K):
                 "n_occluded": n_occ, "objects": objs,
             })
             k += 1
+            if k >= CFG.target_frames:
+                break
 
         labels = {"episode": ep, "split": CFG.split_of(ep), "weather": weather,
                   "ego_distance_m": round(ego_dist, 1), "n_stopped": n_stopped,
