@@ -1,6 +1,6 @@
 venv/
-dataset*/
+data/
+runs/
+legacy/data/
 __pycache__/
 *.pt
-yolo_failure_analysis/
-close_bbox_inspection/
