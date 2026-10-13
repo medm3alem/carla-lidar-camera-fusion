@@ -18,7 +18,8 @@ class Config:
     n_episodes: int = 40
     episode_seconds: float = 15.0
     warmup_seconds: float = 3.0      # laisser le trafic se mettre en place
-    n_npc: int = 40
+    n_npc: int = 70
+    min_ego_speed: float = 0.5       # m/s ; en dessous, la frame est ignorée (doublons à l'arrêt)
     weathers: tuple = ("clear", "rain", "fog")
 
     # --- Caméra RGB / segmentation d'instance / profondeur (même pose) ---
