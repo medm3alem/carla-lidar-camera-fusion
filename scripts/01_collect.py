@@ -152,6 +152,7 @@ def main():
     ap.add_argument("--episodes", type=int, default=CFG.n_episodes)
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--out", default=str(ROOT / "data" / "v4"))
+    ap.add_argument("--town", default=CFG.town)
     args = ap.parse_args()
 
     out_dir = Path(args.out)
@@ -159,8 +160,8 @@ def main():
     client = carla.Client(CFG.host, CFG.port)
     client.set_timeout(60.0)
     world = client.get_world()
-    if not world.get_map().name.endswith(CFG.town):
-        world = client.load_world(CFG.town)
+    if not world.get_map().name.endswith(args.town):
+        world = client.load_world(args.town)
     tm = client.get_trafficmanager(CFG.tm_port)
     original = world.get_settings()
     K = geo.intrinsics(CFG.img_w, CFG.img_h, CFG.fov)
