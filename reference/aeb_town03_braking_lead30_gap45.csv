@@ -1,0 +1,3 @@
+case,scenario,v0,gap,weather,seed,aeb,collided,impact_kmh,min_gap_m,gap_start_m,t_warn,t_brake,final_speed_kmh,v_start_kmh,v_brake_kmh,gap_brake,ttc_brake,n_brake_ticks,max_state,error
+v50_clear_s42_aeb,braking,50.0,45.0,clear,42,True,False,0.0,8.4,44.96,1.85,1.85,0.0,50.1,49.7,31.3,2.27,78,EMERGENCY_BRAKING,
+v50_clear_s43_aeb,braking,50.0,45.0,clear,43,True,False,0.0,6.66,44.98,2.15,2.2,0.0,50.1,49.9,29.7,2.14,75,EMERGENCY_BRAKING,
