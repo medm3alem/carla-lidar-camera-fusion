@@ -1,0 +1,82 @@
+"""Tests du tracker, de l'AEB et du banc cinématique (sans CARLA). Lancer : python -m pytest tests"""
+import sys
+from pathlib import Path
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from fusion.adas import (AEB, AEBConfig, EMERGENCY_BRAKING, NORMAL, Tracker, simulate)
+
+
+def run_tracker(ranges, dt=0.05, y=0.0):
+    tr = Tracker(dt)
+    out = []
+    for r in ranges:
+        out = tr.step([(r, y)])
+    return tr, out
+
+
+def test_tracker_estime_la_vitesse_relative():
+    dt, v = 0.05, 10.0
+    ranges = [50 - v * dt * k for k in range(40)]
+    _, tracks = run_tracker(ranges, dt)
+    assert len(tracks) == 1
+    assert abs(tracks[0].closing_speed - v) < 0.5
+
+
+def test_tracker_deux_objets_deux_pistes():
+    tr = Tracker(0.05)
+    for _ in range(5):
+        tracks = tr.step([(20.0, 0.0), (40.0, 3.0)])
+    assert len(tracks) == 2
+
+
+def test_tracker_supprime_piste_perdue():
+    tr = Tracker(0.05)
+    for _ in range(4):
+        tr.step([(20.0, 0.0)])
+    for _ in range(10):
+        tracks = tr.step([])
+    assert tracks == [] and tr.tracks == []
+
+
+def test_aeb_normal_sans_piste():
+    aeb = AEB(dt=0.05)
+    assert aeb.step([], 14.0).state == NORMAL
+
+
+def test_aeb_urgence_obstacle_arrete_proche():
+    # ego 14 m/s, obstacle arrêté à 12 m : TTC < 1 s, décélération requise infinie
+    dt = 0.05
+    tr, aeb = Tracker(dt), AEB(dt=dt)
+    r, out = 25.0, None
+    for _ in range(40):
+        tracks = tr.step([(r, 0.0)])
+        out = aeb.step(tracks, 14.0)
+        r -= 14.0 * dt
+        if out.state == EMERGENCY_BRAKING:
+            break
+    assert out.state == EMERGENCY_BRAKING and out.brake == 1.0 and r > 0
+
+
+def test_aeb_ignore_hors_couloir():
+    dt = 0.05
+    tr, aeb = Tracker(dt), AEB(dt=dt)
+    r = 30.0
+    for _ in range(30):
+        out = aeb.step(tr.step([(r, 3.0)]), 14.0)
+        r -= 14.0 * dt
+    assert out.state == NORMAL
+
+
+def test_banc_pas_de_collision_50kmh_arrete_a_60m():
+    for fps in (5, 20):
+        for seed in range(10):
+            assert not simulate(v0_kmh=50, gap0=60, fps=fps, dropout=0.1, seed=seed).collided
+
+
+def test_banc_pas_de_faux_freinage_suivi_stable():
+    for seed in range(20):
+        r = simulate(v0_kmh=50, lead_speed_kmh=50, gap0=15, fps=20, dropout=0.1, seed=seed,
+                     t_max=10, dangerous=False)
+        assert not r.false_brake
