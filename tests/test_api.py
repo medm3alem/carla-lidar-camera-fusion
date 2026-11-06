@@ -98,3 +98,88 @@ def test_commande_aeb_transmet_frequence_et_defauts(client, monkeypatch):
     c = cap["cmd"]
     assert c[c.index("--perception-hz") + 1] == "5" and c[c.index("--ghost-len") + 1] == "3"
     assert client.post("/api/runs", json={"kind": "aeb", "perception_hz": 7}).status_code == 422
+
+
+# ---------------------------------------------------------------- campagnes
+ROWS = [
+    {"case": "a", "v0": "50", "aeb": "True", "collided": "False", "min_gap_m": "7.6", "gap_brake": "34.5", "ttc_brake": "2.5", "error": ""},
+    {"case": "b", "v0": "50", "aeb": "True", "collided": "False", "min_gap_m": "7.7", "gap_brake": "34.0", "ttc_brake": "2.4", "error": ""},
+    {"case": "c", "v0": "70", "aeb": "True", "collided": "True", "impact_kmh": "16.3", "min_gap_m": "0.0", "error": ""},
+    {"case": "d", "v0": "70", "aeb": "True", "collided": "False", "min_gap_m": "3.3", "error": ""},
+    {"case": "e", "v0": "70", "aeb": "False", "collided": "True", "impact_kmh": "60", "min_gap_m": "0.0", "error": ""},
+    {"case": "f", "v0": "30", "aeb": "True", "error": "pas de summary.json"},
+]
+
+
+def test_aggregate_dangereux_mediane_pire_cas_et_erreurs():
+    a = m.aggregate(ROWS, "stopped")
+    assert a["hazard"] and a["n_errors"] == 1
+    l50, l70 = a["lines"]
+    assert abs(l50["gap_median"] - 7.65) < 0.06 and l50["gap_worst"] == 7.6   # médiane de 2 valeurs = moyenne
+    assert l70["n"] == 2 and l70["collisions"] == 1 and l70["impact_mean"] == 16.3 and l70["gap_worst"] == 0.0
+
+
+def test_aggregate_non_dangereux_compte_les_freinages():
+    rows = [{"v0": "50", "aeb": "True", "n_brake_ticks": "0", "max_state": "NORMAL", "error": ""},
+            {"v0": "50", "aeb": "True", "n_brake_ticks": "4", "max_state": "EMERGENCY_BRAKING", "error": ""}]
+    l = m.aggregate(rows, "adjacent")["lines"][0]
+    assert l["brakes"] == 1 and l["warnings"] == 1 and l["n"] == 2
+
+
+def _no_process(monkeypatch):
+    """Aucun test ne doit lancer de vrai processus (une campagne lancerait des essais CARLA sur la machine)."""
+    def boom(*a, **k):
+        raise AssertionError("subprocess.Popen appelé dans un test")
+    monkeypatch.setattr(m.subprocess, "Popen", boom)
+
+
+def test_campagne_refusee_sans_carla_ou_trop_grande(client, monkeypatch, tmp_path):
+    _no_process(monkeypatch)
+    monkeypatch.setattr(m, "CAMPAIGNS", tmp_path / "c")
+    monkeypatch.setattr(m, "carla_status", lambda: {"reachable": False})
+    assert client.post("/api/campaigns", json={"scenario": "stopped"}).status_code == 503
+    big = {"speeds": [30, 40, 50, 60, 70], "weathers": ["clear", "rain", "fog"], "seeds": [1, 2, 3, 4, 5]}
+    assert client.post("/api/campaigns", json=big).status_code == 422
+    assert client.post("/api/campaigns", json={"scenario": "nope"}).status_code == 422
+    assert client.post("/api/campaigns", json={"speeds": [200]}).status_code == 422
+
+
+def test_commande_de_campagne(client, monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeProc:
+        returncode = None
+
+        def poll(self):
+            return None
+
+    def fake_popen(cmd, **k):
+        captured["cmd"] = cmd
+        return FakeProc()
+
+    monkeypatch.setattr(m.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(m, "CAMPAIGNS", tmp_path)
+    monkeypatch.setattr(m, "camp_procs", {})
+    monkeypatch.setattr(m, "carla_status", lambda: {"reachable": True})
+    r = client.post("/api/campaigns", json={"scenario": "adjacent", "speeds": [50], "seeds": [43], "perception_hz": 5})
+    assert r.status_code == 200
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("--scenario") + 1] == "adjacent" and "--skip-baseline" in cmd
+    assert "--aeb-opts=--perception-hz 5" in cmd and cmd[cmd.index("--resume") + 1] == r.json()["id"]
+    assert client.post("/api/campaigns", json={}).status_code == 409        # une campagne est déjà active
+
+
+def test_suivi_d_une_campagne(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(m, "CAMPAIGNS", tmp_path)
+    monkeypatch.setattr(m, "camp_procs", {})
+    d = tmp_path / "c1"
+    d.mkdir()
+    (d / "studio_config.json").write_text(json.dumps({"scenario": "stopped", "speeds": [50, 70], "weathers": ["clear"],
+                                                      "seeds": [42, 43], "skip_baseline": True}))
+    (d / "results.csv").write_text("case,v0,aeb,collided,min_gap_m,error\nx,50,True,False,7.6,\ny,50,True,False,7.7,\n")
+    g = client.get("/api/campaigns/c1").json()
+    assert g["done"] == 2 and g["total"] == 4 and g["state"] == "interrupted"
+    assert g["aggregate"]["lines"][0]["n"] == 2
+    assert client.get("/api/campaigns").json()[0]["id"] == "c1"
+    assert client.get("/api/campaigns/inconnue").status_code == 404
+

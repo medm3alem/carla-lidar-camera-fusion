@@ -71,6 +71,27 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:4px 6px;b
 <canvas id="plot" class="hide"></canvas>
 <table id="dets" style="margin-top:10px"><thead><tr><th>#</th><th>Confiance</th><th>Distance LiDAR</th><th>Points</th><th>Estimation caméra</th></tr></thead><tbody></tbody></table></section>
 
+<section class="card" style="grid-column:1/-1"><h2>Campagne d'essais <span class="muted">(vitesses &times; météos &times; graines, un processus CARLA par essai, ~15 s chacun)</span></h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0 12px">
+<div><label>Scénario</label><select id="c_scenario"></select></div>
+<div><label>Vitesses (km/h)</label><input id="c_speeds" value="30 50 70"></div>
+<div><label>Météos</label><input id="c_weathers" value="clear"></div>
+<div><label>Graines</label><input id="c_seeds" value="42 43"></div>
+<div><label>Écart initial (m)</label><input id="c_gap" type="number" value="50" min="10" max="80"></div>
+<div><label>Vitesse cible (km/h)</label><input id="c_lead" type="number" value="30" min="5" max="90"></div>
+<div><label>Fréquence perception</label><select id="c_hz"><option value="20">20 Hz</option><option value="10">10 Hz</option><option value="5">5 Hz</option></select></div>
+<div><label>Fausses détections (prob./image)</label><input id="c_ghost" type="number" value="0" min="0" max="0.2" step="0.005"></div>
+</div>
+<label><input id="c_baseline" type="checkbox">Inclure les témoins sans AEB (double le nombre d'essais)</label>
+<label><input id="c_same" type="checkbox">Cible à la vitesse de l'ego (suivi)</label>
+<button id="c_start">Lancer la campagne</button> <button id="c_stop" class="stop" disabled>Arrêter</button>
+<span id="c_msg" class="muted"></span>
+<div id="c_prog" class="hide" style="margin-top:10px"><div style="height:8px;background:var(--line);border-radius:4px"><div id="c_bar" style="height:8px;width:0;background:var(--acc);border-radius:4px"></div></div><div id="c_txt" class="muted" style="margin-top:4px"></div></div>
+<table id="c_tab" class="hide" style="margin-top:10px"><thead></thead><tbody></tbody></table>
+<div id="c_note" class="muted" style="margin-top:6px;font-size:12px"></div>
+<h2 style="margin-top:14px">Campagnes enregistrées <span class="muted">(cliquer pour afficher les résultats)</span></h2>
+<table id="c_list"><thead><tr><th>Campagne</th><th>État</th><th>Essais</th><th>Config</th></tr></thead><tbody></tbody></table>
+<div class="muted" style="margin-top:6px">Données dans <code>runs\aeb_campaign\&lt;id&gt;\results.csv</code>. Un seul run ou une seule campagne à la fois.</div></section>
 <section class="card" style="grid-column:1/-1"><h2>Runs enregistrés <span class="muted">(cliquer sur un run AEB pour afficher ses courbes)</span></h2>
 <table id="runs"><thead><tr><th>Run</th><th>Type</th><th>État</th><th>Résultat</th><th>Config</th></tr></thead><tbody></tbody></table>
 <div class="muted" style="margin-top:6px">Données dans <code>runs\studio\&lt;run&gt;\</code> (summary.json, log.csv pour l'AEB, images annotées).</div></section>
@@ -86,6 +107,7 @@ async function init(){const o=await api('/api/options');
  $('town').innerHTML=o.towns.map(t=>`<option>${t}</option>`).join('');$('town').value='Town10HD_Opt';
  $('weather').innerHTML=o.weathers.map(t=>`<option>${t}</option>`).join('');
  $('scenario').innerHTML=o.scenarios.map(t=>`<option>${t}</option>`).join('');
+ $('c_scenario').innerHTML=o.scenarios.map(t=>`<option>${t}</option>`).join('');
  $('kind').onchange=kindUI;kindUI();carla();setInterval(carla,5000);runs();setInterval(runs,4000)}
 function resText(x){if(x.kind!=='aeb')return x.n_detections==null?'-':`${x.n_frames} images, ${x.n_detections} détections (${x.n_with_lidar} avec LiDAR)`;
  if(x.collided==null)return '-';return (x.collided?'<span class="err">collision</span>':'sans collision')+`, écart min ${x.min_gap_m} m, état max ${x.max_state}`}
@@ -143,5 +165,31 @@ $('start').onclick=async()=>{$('msg').textContent='';const k=$('kind').value;
   if(ws)ws.close();ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/runs/'+cur);queue=[];lastT=null;if(timer){clearTimeout(timer);timer=null}ws.onmessage=e=>enqueue(JSON.parse(e.data));
  }catch(e){$('msg').innerHTML=`<span class="err">${e.message}</span>`}};
 $('stop').onclick=()=>cur&&api(`/api/runs/${cur}/stop`,{method:'POST'});
+
+// ---- campagnes
+let campCur=null;
+const nums=t=>t.split(/[\s,;]+/).filter(Boolean).map(Number);
+function aggTable(a,cfg){const T=$('c_tab');T.classList.remove('hide');
+ if(a.hazard){T.querySelector('thead').innerHTML='<tr><th>Vitesse</th><th>Essais</th><th>Collisions</th><th>Impact moy.</th><th>Écart min méd. (m)</th><th>Écart pire (m)</th><th>Écart au 1er frein (m)</th><th>TTC 1er frein (s)</th></tr>';
+  T.querySelector('tbody').innerHTML=a.lines.map(l=>`<tr><td>${l.v0} km/h</td><td>${l.n}</td><td>${l.collisions?`<span class="err">${l.collisions}/${l.n}</span>`:`0/${l.n}`}</td><td>${l.impact_mean}</td><td>${l.gap_median??'-'}</td><td>${l.gap_worst??'-'}</td><td>${l.gap_brake??'-'}</td><td>${l.ttc_brake??'-'}</td></tr>`).join('')}
+ else{T.querySelector('thead').innerHTML='<tr><th>Vitesse</th><th>Essais</th><th>Avec freinage (fausse activation)</th><th>Avec alerte</th></tr>';
+  T.querySelector('tbody').innerHTML=a.lines.map(l=>`<tr><td>${l.v0} km/h</td><td>${l.n}</td><td>${l.brakes?`<span class="err">${l.brakes}/${l.n}</span>`:`0/${l.n}`}</td><td>${l.warnings}/${l.n}</td></tr>`).join('')}
+ $('c_note').textContent=(a.n_errors?a.n_errors+' essai(s) en erreur (non comptés). ':'')+'Essais AEB seulement ; peu de graines : un comportement, pas une validation statistique.'}
+async function showCamp(id){campCur=id;try{const c=await api('/api/campaigns/'+id);
+ $('c_prog').classList.remove('hide');const pct=c.total?100*c.done/c.total:0;$('c_bar').style.width=pct+'%';
+ $('c_txt').textContent=`${id} — ${c.state}, ${c.done}/${c.total??'?'} essais`;
+ const run=c.state==='running';$('c_start').disabled=run;$('c_stop').disabled=!run;
+ if(c.aggregate.lines.length)aggTable(c.aggregate,c.config);else $('c_tab').classList.add('hide')}catch(e){$('c_msg').innerHTML=`<span class="err">${e.message}</span>`}}
+async function camps(){try{const r=await api('/api/campaigns');
+ $('c_list').querySelector('tbody').innerHTML=r.map(x=>`<tr style="cursor:pointer" data-cid="${x.id}"><td>${x.id}</td><td>${x.state}</td><td>${x.done}/${x.total??'?'}</td><td class="muted">${x.config.scenario||''} ${(x.config.speeds||[]).join('/')} km/h, graines ${(x.config.seeds||[]).join(',')}, ${x.config.perception_hz||20} Hz</td></tr>`).join('');
+ document.querySelectorAll('#c_list tr[data-cid]').forEach(tr=>tr.onclick=()=>showCamp(tr.dataset.cid));
+ if(!campCur){const run=r.find(x=>x.state==='running');if(run)showCamp(run.id)}else if(r.some(x=>x.id===campCur&&x.state==='running'))showCamp(campCur)}catch{}}
+$('c_start').onclick=async()=>{$('c_msg').textContent='';
+ const body={scenario:$('c_scenario').value,speeds:nums($('c_speeds').value),weathers:$('c_weathers').value.split(/[\s,;]+/).filter(Boolean),seeds:nums($('c_seeds').value),
+  gap:+$('c_gap').value,lead_speed:+$('c_lead').value,same_speed:$('c_same').checked,skip_baseline:!$('c_baseline').checked,perception_hz:+$('c_hz').value,ghost_prob:+$('c_ghost').value};
+ try{const r=await api('/api/campaigns',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});campCur=r.id;showCamp(r.id);camps()}
+ catch(e){$('c_msg').innerHTML=`<span class="err">${e.message}</span>`}};
+$('c_stop').onclick=()=>campCur&&api('/api/campaigns/'+campCur+'/stop',{method:'POST'});
+setInterval(camps,3000);camps();
 init();
 </script></body></html>

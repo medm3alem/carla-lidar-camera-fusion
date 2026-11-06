@@ -37,10 +37,24 @@ from fusion.perception import fuse_box, mono_depth, project_lidar
 COCO_VEHICLES = [2, 5, 7]
 
 
-def write_json(path, obj):
+def replace_retry(src, dst, tries=50):
+    """Renomme src -> dst. Sous Windows le renommage échoue (PermissionError) si le lecteur (API, navigateur) a le
+    fichier ouvert à cet instant : on réessaie quelques ms. Retourne False si l'échec persiste (fichier d'affichage :
+    on saute cette mise à jour plutôt que d'arrêter la simulation)."""
+    for k in range(tries):
+        try:
+            src.replace(dst)
+            return True
+        except PermissionError:
+            time.sleep(0.01 + 0.002 * k)
+    return False
+
+
+def write_json(path, obj, critical=False):
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(obj))
-    tmp.replace(path)
+    if not replace_retry(tmp, path) and critical:
+        path.write_text(json.dumps(obj))          # résultat final : écriture directe plutôt que le perdre
 
 
 def annotate(img, dets):
@@ -183,7 +197,7 @@ def main():
                 jl.flush()
                 ann = annotate(img, dets)
                 cv2.imwrite(str(run_dir / "latest.jpg.tmp.jpg"), ann)
-                (run_dir / "latest.jpg.tmp.jpg").replace(run_dir / "latest.jpg")
+                replace_retry(run_dir / "latest.jpg.tmp.jpg", run_dir / "latest.jpg")
                 write_json(run_dir / "latest.json", rec)
                 if not args.no_save_images:
                     cv2.imwrite(str(run_dir / "frames" / f"{k:05d}.jpg"), ann)
@@ -221,8 +235,8 @@ def main():
             "infer_ms_median": round(float(np.median(infer_ms)), 1) if infer_ms else None,
             "config": vars(args),
         }
-        write_json(run_dir / "summary.json", summary)
-        write_json(run_dir / "status.json", status)
+        write_json(run_dir / "summary.json", summary, critical=True)
+        write_json(run_dir / "status.json", status, critical=True)
         print(json.dumps(summary, indent=1))
 
 

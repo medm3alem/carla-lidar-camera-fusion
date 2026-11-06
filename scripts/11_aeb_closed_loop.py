@@ -38,16 +38,30 @@ import carla
 from fusion.config import CFG
 from fusion import geometry as geo
 from fusion.rig import WEATHER, fetch, spawn_sensors, lidar_points
-from fusion.perception import fuse_box_lateral, project_lidar
+from fusion.perception import fuse_box, project_lidar
 from fusion.adas import AEB, AEBConfig, FaultInjector, Tracker
 
 STATE_COLOR = {0: (0, 200, 0), 1: (0, 200, 255), 2: (0, 140, 255), 3: (0, 0, 255)}
 
 
-def write_json(path, obj):
+def replace_retry(src, dst, tries=50):
+    """Renomme src -> dst. Sous Windows le renommage échoue (PermissionError) si le lecteur (API, navigateur) a le
+    fichier ouvert à cet instant : on réessaie quelques ms. Retourne False si l'échec persiste (fichier d'affichage :
+    on saute cette mise à jour plutôt que d'arrêter la simulation)."""
+    for k in range(tries):
+        try:
+            src.replace(dst)
+            return True
+        except PermissionError:
+            time.sleep(0.01 + 0.002 * k)
+    return False
+
+
+def write_json(path, obj, critical=False):
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(obj))
-    tmp.replace(path)
+    if not replace_retry(tmp, path) and critical:
+        path.write_text(json.dumps(obj))          # résultat final : écriture directe plutôt que le perdre
 
 
 def wrap(a):
@@ -140,8 +154,6 @@ def main():
                     help="fréquence de la perception + tracker + AEB (20 = chaque tick ; le frein est maintenu entre deux)")
     ap.add_argument("--confirm-s", type=float, default=0.15,
                     help="durée de persistance exigée avant qu'une piste soit confirmée (s) ; 0 = 2 mesures seulement")
-    ap.add_argument("--lateral-source", choices=["lidar", "box"], default="lidar",
-                    help="latéral de la mesure : médiane des points LiDAR du groupe (défaut) ou centre de la boîte (ancien)")
     ap.add_argument("--ghost-prob", type=float, default=0.0, help="injection : probabilité par image de démarrer une fausse détection dans le couloir")
     ap.add_argument("--ghost-len", type=int, default=1, help="injection : durée d'une fausse détection (images traitées)")
     ap.add_argument("--drop-prob", type=float, default=0.0, help="injection : probabilité de perdre une mesure")
@@ -309,11 +321,11 @@ def main():
                 infer_ms.append(1000 * (time.time() - t0))
                 meas, dets = [], []
                 for b, c in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()):
-                    d_l, n_c, lat_l = fuse_box_lateral(uv, depth, b, K)
+                    d_l, n_c = fuse_box(uv, depth, b)
                     if d_l is None:
                         continue
-                    lat = lat_l if args.lateral_source == "lidar" else ((b[0] + b[2]) / 2 - K[0, 2]) * d_l / K[0, 0]
-                    meas.append((d_l - cam_to_bumper, lat))
+                    u_c = (b[0] + b[2]) / 2
+                    meas.append((d_l - cam_to_bumper, (u_c - K[0, 2]) * d_l / K[0, 0]))
                     dets.append((b, d_l, n_c))
                 if faults.active:
                     meas = faults.apply(meas, ev, pdt)
@@ -365,7 +377,7 @@ def main():
                 name = f"{i:05d}.jpg"
                 (run_dir / "frames" / name).write_bytes(buf.tobytes())
                 (run_dir / "latest.tmp.jpg").write_bytes(buf.tobytes())
-                (run_dir / "latest.tmp.jpg").replace(run_dir / "latest.jpg")
+                replace_retry(run_dir / "latest.tmp.jpg", run_dir / "latest.jpg")
                 rec = {"idx": k_img, "img": name, "t": round(t, 2), "ego_kmh": round(ev * 3.6, 1),
                        "lead_kmh": round(vlv * 3.6, 1), "gap_true": round(g, 2),
                        "meas_range": log[-1]["meas_range"], "state": out.state_name,
@@ -430,7 +442,7 @@ def main():
         except Exception as e:                               # noqa: BLE001
             print(f"nettoyage incomplet : {e}", file=sys.stderr)
         (run_dir / "summary.json").write_text(json.dumps(summary, indent=1))
-        write_json(run_dir / "status.json", status)
+        write_json(run_dir / "status.json", status, critical=True)
         jl.close()
         print(json.dumps(summary, indent=1))
 
