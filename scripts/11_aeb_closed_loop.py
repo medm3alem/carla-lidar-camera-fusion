@@ -3,8 +3,10 @@ AEB en boucle fermée dans CARLA : un scénario scripté, la perception réelle 
 le tracker et l'AEB commandent le frein de l'ego. Sans trafic : seuls l'ego et le véhicule cible.
 
 Scénarios
-  stopped : véhicule cible à l'arrêt devant l'ego (qui roule à --v0)
-  braking : véhicule cible roulant à --lead-speed, qui freine à t = --lead-brake-t
+  stopped  : véhicule cible à l'arrêt devant l'ego (qui roule à --v0)
+  braking  : véhicule cible roulant à --lead-speed, qui freine à t = --lead-brake-t
+  adjacent : véhicule à l'arrêt décalé de --lateral m (voie voisine) : l'ego doit passer SANS freiner
+  follow   : véhicule devant à --lead-speed constante, sans freiner : l'ego ne doit PAS freiner
 Chaque tick (20 Hz) : capteurs -> YOLO -> LiDAR -> tracker -> AEB -> commande de l'ego.
 Sorties : runs\aeb\<id>\ log.csv (une ligne par tick), summary.json, frames\ (images annotées à ~5 Hz).
 
@@ -99,12 +101,14 @@ def cruise(veh, cmap, target):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--scenario", choices=["stopped", "braking"], default="stopped")
+    ap.add_argument("--scenario", choices=["stopped", "braking", "adjacent", "follow"], default="stopped")
     ap.add_argument("--v0", type=float, default=50.0, help="vitesse de l'ego, km/h")
     ap.add_argument("--gap", type=float, default=80.0, help="écart initial (pare-chocs à pare-chocs), m")
     ap.add_argument("--lead-speed", type=float, default=50.0, help="km/h (scénario braking)")
     ap.add_argument("--lead-brake-t", type=float, default=3.0)
     ap.add_argument("--lead-brake", type=float, default=0.75, help="consigne de frein du véhicule cible")
+    ap.add_argument("--lateral", type=float, default=3.5, help="décalage latéral de la cible (scénario adjacent), m")
+    ap.add_argument("--follow-seconds", type=float, default=4.0, help="durée du scénario follow")
     ap.add_argument("--no-aeb", action="store_true")
     ap.add_argument("--town", default="Town10HD_Opt")
     ap.add_argument("--weather", default="clear", choices=list(WEATHER))
@@ -142,10 +146,17 @@ def main():
         world.set_weather(WEATHER[args.weather])
 
         v0 = args.v0 / 3.6
-        vl = 0.0 if args.scenario == "stopped" else args.lead_speed / 3.6
+        vl = args.lead_speed / 3.6 if args.scenario in ("braking", "follow") else 0.0
         # route nécessaire : écart initial + trajet de la cible + marge pour que l'ego s'arrête
-        lead_travel = 0.0 if vl == 0 else vl * args.lead_brake_t + vl ** 2 / (2 * 4.0)
-        need = args.gap + 5.0 + lead_travel + 25.0
+        if args.scenario == "braking":
+            need = args.gap + 5.0 + vl * args.lead_brake_t + vl ** 2 / (2 * 4.0) + 25.0
+        elif args.scenario == "follow":
+            need = args.gap + 5.0 + vl * args.follow_seconds + 15.0
+        elif args.scenario == "adjacent":
+            need = args.gap + 5.0 + 20.0
+        else:
+            need = args.gap + 5.0 + 25.0
+        lead_travel = need - args.gap - 5.0
         wp0, avail = find_straight(cmap, need, random.Random(args.seed))
         print(f"tronçon droit : {avail:.0f} m disponibles, {need:.0f} m nécessaires")
         if wp0 is None or avail < need:
@@ -162,8 +173,10 @@ def main():
         # rapprochement pendant les 5 ticks de mise en place
         d_center = args.gap + ext_e + 2.4 + (v0 - vl) * 5 * CFG.dt
         wpl = wp0.next(d_center)[0]
-        lead = world.spawn_actor(lead_bp, carla.Transform(wpl.transform.location + carla.Location(z=0.3),
-                                                           wpl.transform.rotation))
+        rv = wpl.transform.get_right_vector()
+        off = args.lateral if args.scenario == "adjacent" else 0.0
+        lead = world.spawn_actor(lead_bp, carla.Transform(
+            wpl.transform.location + carla.Location(x=rv.x * off, y=rv.y * off, z=0.3), wpl.transform.rotation))
         actors.append(lead)
         ext_l = lead.bounding_box.extent.x
         fwd = wp0.transform.get_forward_vector()
@@ -178,9 +191,9 @@ def main():
         sensors = [col] + sensors_cam
 
         def lead_control(t):
-            if args.scenario == "stopped":
+            if args.scenario in ("stopped", "adjacent"):
                 return carla.VehicleControl(brake=1.0, hand_brake=True)
-            if t >= args.lead_brake_t:
+            if args.scenario == "braking" and t >= args.lead_brake_t:
                 return carla.VehicleControl(brake=args.lead_brake, steer=lane_steer(lead, cmap))
             return cruise(lead, cmap, vl)
 
@@ -209,7 +222,8 @@ def main():
         gap_start = min_gap
         stopped_ticks = 0
         last_ev, last_vl = speed_of(ego.get_velocity()), speed_of(lead.get_velocity())
-        n_ticks = int(args.t_max / CFG.dt)
+        t_run = args.follow_seconds if args.scenario == "follow" else args.t_max
+        n_ticks = int(t_run / CFG.dt)
         out = None
         for i in range(1, n_ticks + 1):
             t = i * CFG.dt
@@ -271,7 +285,10 @@ def main():
             stopped_ticks = stopped_ticks + 1 if ev < 0.1 else 0
             if stopped_ticks > 20:
                 break
-            if g < -1.0:
+            if args.scenario == "adjacent":
+                if g < -10.0:                                # l'ego a dépassé la cible
+                    break
+            elif args.scenario != "follow" and g < -1.0:
                 collided, impact = True, max(ev - vlv, 0.0)
                 break
         summary.update({
@@ -280,6 +297,10 @@ def main():
             "ego_final_speed_kmh": round(log[-1]["ego_v"] * 3.6, 1) if log else None,
             "n_ticks": len(log), "infer_ms_median": round(float(np.median(infer_ms)), 1) if infer_ms else None,
             "aeb_enabled": not args.no_aeb, "error": None,
+            "n_brake_ticks": sum(1 for r_ in log if r_["brake"] > 0),
+            "n_warning_ticks": sum(1 for r_ in log if r_["state"] != "NORMAL"),
+            "max_state": max((r_["state"] for r_ in log), key=["NORMAL", "WARNING", "PARTIAL_BRAKING",
+                                                                "EMERGENCY_BRAKING"].index) if log else None,
         })
         with open(run_dir / "log.csv", "w", newline="") as f:
             wr = csv.DictWriter(f, fieldnames=list(log[0].keys()))
