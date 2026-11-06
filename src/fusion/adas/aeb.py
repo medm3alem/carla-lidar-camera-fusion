@@ -47,6 +47,10 @@ class AEBConfig:
     # le frein à 16 m d'un obstacle fixe à 7,5 m/s, et il faut ensuite freiner plus fort : essai CARLA, 50 km/h).
     hysteresis: float = 0.7
     stopped_speed: float = 0.5
+    # Garde contre les pistes "en roue libre" (tolérance 2 images : à 5 Hz, 0 donnait jusqu'à +9 collisions sur 40 avec 30 % de pertes) : une piste sans mesure depuis plus de `escalate_max_misses` images est
+    # extrapolée par le filtre, pas observée ; elle ne peut pas faire monter le niveau (elle continue de retenir le frein
+    # déjà engagé). Cas CARLA : fausse piste dérivant dans le couloir à 5 Hz. None = désactivé (ancien comportement).
+    escalate_max_misses: Optional[int] = 2
     # Anticipation d'une cible qui freine (nécessite Tracker(model="ca")) : désactivée par défaut
     use_lead_decel: bool = False
     lead_decel_min: float = 3.0          # m/s^2 : ~4 écarts-types du bruit d'estimation (saccade 2 m/s^3)
@@ -135,6 +139,8 @@ class AEB:
                     a = max(a, self.required_decel_lead_stop(t.range, ego_speed, vl, al))
             lvl = self._raw_level(v, a)
             hold = max(hold, self._raw_level(v, a, c.hysteresis))
+            if c.escalate_max_misses is not None and getattr(t, "misses", 0) > c.escalate_max_misses:
+                continue                                  # extrapolée, non observée : ne déclenche pas
             if target is None or lvl > raw or (lvl == raw and v < ttc):
                 target, ttc, a_req, raw = t, v, a, lvl
 

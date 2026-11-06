@@ -157,10 +157,31 @@ DEPASSEMENT = [[(15.8, 3.2), (36.1, 6.4)], [(13.9, 3.2), (36.1, 6.4)], [(11.1, 3
 
 def _depassement(vy_init_std):
     tr = Tracker(0.2, model="ca", jerk=2.0, vy_init_std=vy_init_std)
-    aeb = AEB(AEBConfig(use_lead_decel=True, t_latency=0.85), 0.2)
+    aeb = AEB(AEBConfig(use_lead_decel=True, t_latency=0.85, escalate_max_misses=None), 0.2)   # sans la garde
     return max(aeb.step(tr.step(m), 13.88).state for m in DEPASSEMENT)
 
 
 def test_depassement_a_5hz_ne_declenche_pas_le_freinage():
     assert _depassement(2.0) == NORMAL
     assert _depassement(8.0) == EMERGENCY_BRAKING     # ancien a priori : reproduit l'événement CARLA
+
+
+def _depassement_garde(garde):
+    tr = Tracker(0.2, model="ca", jerk=2.0, vy_init_std=8.0)       # ancien a priori : piste fantôme qui dérive
+    cfg = AEBConfig(use_lead_decel=True, t_latency=0.85, escalate_max_misses=2 if garde else None)
+    aeb = AEB(cfg, 0.2)
+    return max(aeb.step(tr.step(m), 13.88).state for m in DEPASSEMENT)
+
+
+def test_garde_piste_en_roue_libre():
+    assert _depassement_garde(False) == EMERGENCY_BRAKING
+    assert _depassement_garde(True) == NORMAL
+
+
+def test_garde_ne_retarde_pas_une_cible_reelle():
+    # cible arrêtée à 50 m, ego à 13,9 m/s, une mesure perdue sur 4 : doit quand même freiner jusqu'à l'arrêt
+    tr, aeb, x, st = Tracker(0.05, model="ca"), AEB(AEBConfig(), 0.05), 50.0, 0
+    for k in range(120):
+        x -= 13.88 * 0.05
+        st = max(st, aeb.step(tr.step([] if k % 4 == 3 else [(x, 0.0)]), 13.88).state)
+    assert st == EMERGENCY_BRAKING

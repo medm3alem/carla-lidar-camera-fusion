@@ -30,7 +30,8 @@ puis suivi (Kalman) et freinage d'urgence automatique (AEB) validé en boucle fe
 - **Tracker** : Kalman dans le repère véhicule, vitesse et accélération relatives (modèle `ca`).
 - **AEB** : machine d'états NORMAL / WARNING / PARTIAL / EMERGENCY pilotée par la décélération requise
   `a_req = v² / (2 (x - v·t_latence - marge))`, confirmation sur 2 images, hystérésis à la désescalade,
-  anticipation optionnelle d'une cible qui freine. Seuils calibrés sur la décélération mesurée de la voiture
+  anticipation optionnelle d'une cible qui freine, et garde contre les pistes « en roue libre » (une piste sans mesure
+  depuis plus de 2 images ne peut plus faire monter le niveau ; elle retient seulement un frein déjà engagé). Seuils calibrés sur la décélération mesurée de la voiture
   CARLA (≈ 4 m/s² à 70 km/h à frein 100 %), pas sur des valeurs homologuées. Jeu par défaut : alerte / partiel /
   urgence à 2,0 / 3,0 / 4,0 m/s² de décélération requise, frein partiel à 70 %. `AEBConfig.conservative()` garde
   le jeu précédent (1,5 / 2,5 / 3,5, 60 %), qui freine ~0,7 s plus tôt à 50 km/h.
@@ -120,5 +121,7 @@ sont dans reference/.
   de deux détections proches recevait une vitesse latérale initiale d'environ -5 m/s (a priori trop large, 8 m/s), et
   dérivait dans le couloir pendant 3 images. L'a priori latéral est ramené à 2 m/s (`vy_init_std`) ; test de
   non-régression `test_depassement_a_5hz_...`. En CARLA : 0 freinage sur 8 lancements de la graine 43, et 0/18 sur
-  les graines 42 à 47 à 30 / 50 / 70 km/h. Mesure latérale par points LiDAR (`--lateral-source lidar`, défaut) :
+  les graines 42 à 47 à 30 / 50 / 70 km/h. Garde `escalate_max_misses=2` ajoutée ensuite : neutralise la séquence rejouée même avec l'ancien a priori ;
+  tolérance 0 écartée (jusqu'à +9 collisions sur 40 à 5 Hz avec pertes de mesure, banc cinématique). Revalidée en CARLA :
+  cible arrêtée et véhicule qui freine inchangés, 0/9 freinage hors couloir à 5 Hz. Mesure latérale par points LiDAR (`--lateral-source lidar`, défaut) :
   n'a pas résolu le problème à elle seule.
