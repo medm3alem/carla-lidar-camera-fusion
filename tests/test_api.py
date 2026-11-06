@@ -61,3 +61,40 @@ def test_commande_du_scenario_aeb(client, monkeypatch):
     cmd = cap["cmd"]
     assert cmd[1].endswith("11_aeb_closed_loop.py") and "--no-aeb" in cmd
     assert cmd[cmd.index("--scenario") + 1] == "braking" and cmd[cmd.index("--run-id") + 1] == r.json()["run_id"]
+
+
+def test_websocket_envoie_chaque_image_puis_le_final(client, tmp_path):
+    d = tmp_path / "r2"
+    (d / "frames").mkdir(parents=True)
+    (d / "status.json").write_text(json.dumps({"state": "finished", "error": None}))
+    (d / "summary.json").write_text(json.dumps({"collided": False}))
+    (d / "config.json").write_text(json.dumps({"kind": "aeb"}))
+    recs = [{"idx": i, "img": f"{i:05d}.jpg", "t": 0.1 * i, "state": "NORMAL"} for i in range(5)]
+    (d / "frames.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
+    for r in recs:
+        (d / "frames" / r["img"]).write_bytes(b"jpg" + bytes([r["idx"]]))
+    with client.websocket_connect("/ws/runs/r2") as ws:
+        got = []
+        while True:
+            m = ws.receive_json()
+            if m.get("final"):
+                break
+            got.append(m)
+    assert [g["frame"]["idx"] for g in got] == [0, 1, 2, 3, 4]
+    assert all(g["image"] for g in got) and m["summary"] == {"collided": False}
+
+
+def test_commande_aeb_transmet_frequence_et_defauts(client, monkeypatch):
+    monkeypatch.setattr(m, "carla_status", lambda: {"reachable": True})
+    cap = {}
+
+    class P:
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(m.subprocess, "Popen", lambda cmd, **k: (cap.setdefault("cmd", cmd), P())[1])
+    r = client.post("/api/runs", json={"kind": "aeb", "perception_hz": 5, "ghost_prob": 0.01, "ghost_len": 3})
+    assert r.status_code == 200
+    c = cap["cmd"]
+    assert c[c.index("--perception-hz") + 1] == "5" and c[c.index("--ghost-len") + 1] == "3"
+    assert client.post("/api/runs", json={"kind": "aeb", "perception_hz": 7}).status_code == 422

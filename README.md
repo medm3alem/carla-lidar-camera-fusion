@@ -45,6 +45,25 @@ Banc de test maison : conducteur et régulateur de l'ego écrits pour l'essai, p
 Les CSV figés sont dans `reference/` (`aeb_*_v3_*.csv`). Ils sont reproductibles avec
 `python scripts\12_aeb_campaign.py --scenario stopped --speeds 30 50 70 --weathers clear --seeds 42 43 44 45`.
 
+## Studio web (backend/)
+```
+python -m uvicorn app.main:app --app-dir backend --port 8000     # serveur CARLA lancé ; puis http://localhost:8000
+```
+Deux types de run : **observation** (trafic, YOLO + distances LiDAR) et **scénario AEB** en boucle fermée
+(`scripts/11_aeb_closed_loop.py` lancé en sous-processus). Vue vidéo en direct (images à 10 Hz, rejouées avec
+une petite mémoire tampon), état de l'AEB, décélération requise, écart ; à la fin, bilan et courbes
+(`runs/studio/<run>/log.csv`). Options : AEB désactivé (témoin), fréquence de perception 20 / 10 / 5 Hz,
+injection de défauts (fausses détections de durée réglable, pertes de mesure, bruit de distance).
+Un seul run à la fois (une instance CARLA, un GPU). Tests de l'API sans CARLA : `python -m pytest tests`.
+
+### Robustesse aux fausses détections (modèle hors CARLA, `tests/test_faults.py`)
+Sur route dégagée à 50 km/h, avec ~6 fausses détections par essai de 30 s (chacune dans le couloir, avec une
+mesure LiDAR plausible) : une détection isolée d'**une** image ne déclenche jamais de freinage (0/40 essais), mais
+une durée de **2 images** déclenche au moins un freinage dans 17/40 essais à 20 Hz, et de 3 images dans 39/40.
+C'est une faiblesse connue : la confirmation actuelle (2 mesures du tracker + 2 images de l'AEB) est courte.
+Ce résultat vient d'un modèle de défauts simple, pas du détecteur réel ; à confirmer en boucle fermée avec
+`--ghost-prob` / `--ghost-len` et à traiter (durcir la confirmation et mesurer le retard de freinage induit).
+
 ## Reproduire
 ```
 python -m venv venv ; venv\Scripts\activate

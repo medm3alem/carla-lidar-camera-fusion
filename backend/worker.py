@@ -115,7 +115,7 @@ def main():
         device = 0 if torch.cuda.is_available() else "cpu"
 
         client = carla.Client(CFG.host, CFG.port)
-        client.set_timeout(60.0)
+        client.set_timeout(20.0)             # CARLA lancé mais pas prêt : échec rapide et explicite
         world = client.get_world()
         if not world.get_map().name.endswith(args.town):
             world = client.load_world(args.town)

@@ -28,6 +28,7 @@ STATIC = ROOT / "backend" / "static"
 TOWNS = ["Town01", "Town02", "Town03", "Town04", "Town05", "Town10HD_Opt"]
 WEATHERS = ["clear", "rain", "fog"]
 CARLA_HOST, CARLA_PORT = "localhost", 2000
+MAX_BACKLOG = 20          # images au plus envoyées d'un coup à un client en retard
 
 app = FastAPI(title="ADAS Validation Studio")
 procs: dict = {}          # run_id -> Popen
@@ -49,6 +50,11 @@ class RunConfig(BaseModel):
     lead_speed: float = Field(50.0, ge=5, le=90)
     lead_brake_t: float = Field(3.0, ge=0, le=20)
     aeb: bool = True
+    perception_hz: int = 20             # 20 | 10 | 5 : fréquence de perception + tracker + AEB
+    ghost_prob: float = Field(0.0, ge=0.0, le=0.2)
+    ghost_len: int = Field(1, ge=1, le=30)
+    drop_prob: float = Field(0.0, ge=0.0, le=0.9)
+    noise_sigma: float = Field(0.0, ge=0.0, le=2.0)
 
 
 def active_run():
@@ -101,7 +107,8 @@ def options():
 @app.post("/api/runs")
 def start_run(cfg: RunConfig):
     if (cfg.town not in TOWNS or cfg.weather not in WEATHERS or cfg.model not in ("finetuned", "coco")
-            or cfg.kind not in ("observe", "aeb") or cfg.scenario not in SCENARIOS):
+            or cfg.kind not in ("observe", "aeb") or cfg.scenario not in SCENARIOS
+            or cfg.perception_hz not in (20, 10, 5)):
         raise HTTPException(422, "paramètre invalide")
     busy = active_run()
     if busy:
@@ -116,12 +123,15 @@ def start_run(cfg: RunConfig):
                "--scenario", cfg.scenario, "--v0", str(cfg.v0), "--gap", str(cfg.gap),
                "--lead-speed", str(cfg.lead_speed), "--lead-brake-t", str(cfg.lead_brake_t),
                "--town", cfg.town, "--weather", cfg.weather, "--seed", str(cfg.seed), "--conf", str(cfg.conf)]
+        cmd += ["--perception-hz", str(cfg.perception_hz), "--ghost-prob", str(cfg.ghost_prob),
+                "--ghost-len", str(cfg.ghost_len), "--drop-prob", str(cfg.drop_prob),
+                "--noise-sigma", str(cfg.noise_sigma)]
         if not cfg.aeb:
             cmd.append("--no-aeb")
     else:
         cmd = [sys.executable, str(WORKER), "--run-id", run_id, "--town", cfg.town,
                "--weather", cfg.weather, "--n-npc", str(cfg.n_npc), "--seconds", str(cfg.seconds),
-               "--seed", str(cfg.seed), "--conf", str(cfg.conf)]
+               "--seed", str(cfg.seed), "--conf", str(cfg.conf), "--every", "2"]   # 10 Hz : vidéo plus fluide
         if cfg.model == "coco":
             cmd += ["--coco", "--weights", str(ROOT / "weights" / "yolo26n.pt")]
         (d / "config.json").write_text(json.dumps({**(cfg.model_dump() if hasattr(cfg, "model_dump") else cfg.dict()), "run_id": run_id}))
@@ -196,37 +206,58 @@ def frames(run_id: str, start: int = 0, limit: int = 500):
     return rows[start:start + min(limit, 2000)]
 
 
+def read_new_lines(path: Path, offset: int):
+    """Lignes JSON complètes ajoutées à `path` depuis `offset` ; renvoie (enregistrements, nouvel offset)."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(offset)
+            data = f.read()
+    except OSError:
+        return [], offset
+    end = data.rfind(b"\n")
+    if end < 0:
+        return [], offset
+    recs = []
+    for line in data[:end].splitlines():
+        try:
+            recs.append(json.loads(line))
+        except ValueError:
+            pass
+    return recs, offset + end + 1
+
+
+def frame_image(d: Path, rec: dict):
+    name = rec.get("img") or f"{rec.get('idx', 0):05d}.jpg"
+    for p in (d / "frames" / name, d / "latest.jpg"):
+        try:
+            return base64.b64encode(p.read_bytes()).decode()
+        except OSError:
+            continue
+    return None
+
+
 @app.websocket("/ws/runs/{run_id}")
 async def stream(ws: WebSocket, run_id: str):
+    """Envoie CHAQUE image enregistrée (pas seulement la dernière) pour une vidéo fluide ; le client les
+    rejoue avec une petite mémoire tampon. Si le client prend du retard, on saute les plus anciennes."""
     await ws.accept()
     try:
         d = run_dir(run_id)
     except HTTPException:
         await ws.close(code=4404)
         return
-    last = None
+    offset = 0
     try:
         while True:
             st = run_status(run_id)
-            lj = d / "latest.json"
-            m = lj.stat().st_mtime_ns if lj.exists() else None
-            msg = None
-            if m is not None and m != last:
-                last = m
-                rec = read_json(lj)
-                try:
-                    img = base64.b64encode((d / "latest.jpg").read_bytes()).decode()
-                except OSError:
-                    img = None
-                if rec is not None:
-                    msg = {"status": st, "frame": rec, "image": img}
-            if msg is None and st["state"] not in ("starting", "running"):
+            recs, offset = read_new_lines(d / "frames.jsonl", offset)
+            for rec in recs[-MAX_BACKLOG:]:
+                await ws.send_json({"status": st, "frame": rec, "image": frame_image(d, rec)})
+            if not recs and st["state"] not in ("starting", "running"):
                 await ws.send_json({"status": st, "frame": None, "image": None, "final": True,
                                     "summary": read_json(d / "summary.json")})
                 break
-            if msg is not None:
-                await ws.send_json(msg)
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.04)
     except Exception:       # noqa: BLE001 : client parti
         pass
 

@@ -39,7 +39,7 @@ from fusion.config import CFG
 from fusion import geometry as geo
 from fusion.rig import WEATHER, fetch, spawn_sensors, lidar_points
 from fusion.perception import fuse_box, project_lidar
-from fusion.adas import AEB, AEBConfig, Tracker
+from fusion.adas import AEB, AEBConfig, FaultInjector, Tracker
 
 STATE_COLOR = {0: (0, 200, 0), 1: (0, 200, 255), 2: (0, 140, 255), 3: (0, 0, 255)}
 
@@ -136,6 +136,13 @@ def main():
     ap.add_argument("--jerk", type=float, default=2.0, help="bruit de saccade du tracker ca (m/s^3)")
     ap.add_argument("--lead-decel", action=argparse.BooleanOptionalAction, default=None,
                     help="anticipe l'arrêt d'une cible qui freine (exige --tracker ca ; actif par défaut avec ca)")
+    ap.add_argument("--perception-hz", type=int, choices=[20, 10, 5], default=20,
+                    help="fréquence de la perception + tracker + AEB (20 = chaque tick ; le frein est maintenu entre deux)")
+    ap.add_argument("--ghost-prob", type=float, default=0.0, help="injection : probabilité par image de démarrer une fausse détection dans le couloir")
+    ap.add_argument("--ghost-len", type=int, default=1, help="injection : durée d'une fausse détection (images traitées)")
+    ap.add_argument("--drop-prob", type=float, default=0.0, help="injection : probabilité de perdre une mesure")
+    ap.add_argument("--noise-sigma", type=float, default=0.0, help="injection : bruit gaussien sur la distance (m)")
+    ap.add_argument("--frame-every", type=int, default=2, help="une image annotée tous les N ticks (2 = 10 Hz)")
     ap.add_argument("--town", default="Town10HD_Opt")
     ap.add_argument("--weather", default="clear", choices=list(WEATHER))
     ap.add_argument("--seed", type=int, default=42)
@@ -158,6 +165,7 @@ def main():
     (run_dir / "frames").mkdir(parents=True, exist_ok=True)
     status = {"state": "starting", "scenario": args.scenario, "t": 0.0, "error": None}
     write_json(run_dir / "status.json", status)
+    jl = open(run_dir / "frames.jsonl", "w")
 
     client = carla.Client(CFG.host, CFG.port)
     client.set_timeout(30.0)
@@ -236,7 +244,11 @@ def main():
                 fetch(q[n], frame)
 
         K = geo.intrinsics(CFG.img_w, CFG.img_h, CFG.fov)
-        tracker = Tracker(CFG.dt, model=args.tracker, jerk=args.jerk)
+        div = max(1, round(1.0 / (CFG.dt * args.perception_hz)))
+        pdt = CFG.dt * div                                    # pas de la perception, du tracker et de l'AEB
+        faults = FaultInjector(args.ghost_prob, args.ghost_len, drop_prob=args.drop_prob,
+                               noise_sigma=args.noise_sigma, seed=args.seed)
+        tracker = Tracker(pdt, model=args.tracker, jerk=args.jerk)
         ov = {k: v for k, v in (("a_warn", args.a_warn), ("a_partial", args.a_partial),
                                 ("a_emergency", args.a_emergency), ("t_latency", args.t_latency),
                                 ("brake_partial", args.brake_partial)) if v is not None}
@@ -245,7 +257,7 @@ def main():
             if args.tracker != "ca":
                 raise RuntimeError("--lead-decel exige --tracker ca")
             ov["use_lead_decel"] = True
-        aeb = AEB(AEBConfig(**ov), CFG.dt)
+        aeb = AEB(AEBConfig(**ov), pdt)
         summary["aeb_overrides"] = ov
         cam_to_bumper = ext_e - CFG.cam_pos[0]               # la profondeur LiDAR est mesurée depuis la caméra
 
@@ -267,7 +279,7 @@ def main():
         last_ev, last_vl = speed_of(ego.get_velocity()), speed_of(lead.get_velocity())
         t_run = args.follow_seconds if args.scenario in ("follow", "approach") else args.t_max
         n_ticks = int(t_run / CFG.dt)
-        out = None
+        out, dets, tracks, k_img = None, [], [], 0
         for i in range(1, n_ticks + 1):
             t = i * CFG.dt
             if (run_dir / "STOP").exists():
@@ -277,25 +289,27 @@ def main():
             rgb_d, lid_d = fetch(q["rgb"], frame), fetch(q["lidar"], frame)
             img = np.ascontiguousarray(
                 np.frombuffer(rgb_d.raw_data, np.uint8).reshape(CFG.img_h, CFG.img_w, 4)[:, :, :3])
-            T_wc, T_wl = np.array(rgb_d.transform.get_matrix()), np.array(lid_d.transform.get_matrix())
-            pts, _ = lidar_points(lid_d, T_wc, T_wl)
-            uv, depth = project_lidar(pts, T_wl, T_wc, K, CFG.img_w, CFG.img_h, CFG.lidar_pos[2])
-
-            t0 = time.time()
-            r = model.predict(img, imgsz=args.imgsz, conf=args.conf, classes=[0], device=device, verbose=False)[0]
-            infer_ms.append(1000 * (time.time() - t0))
-            meas, dets = [], []
-            for b, c in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()):
-                d_l, n_c = fuse_box(uv, depth, b)
-                if d_l is None:
-                    continue
-                u_c = (b[0] + b[2]) / 2
-                meas.append((d_l - cam_to_bumper, (u_c - K[0, 2]) * d_l / K[0, 0]))
-                dets.append((b, d_l, n_c))
-            tracks = tracker.step(meas)
-
             ev, vlv = speed_of(ego.get_velocity()), speed_of(lead.get_velocity())
-            out = aeb.step(tracks, ev)
+            if (i - 1) % div == 0:                           # tick de perception (le frein est maintenu entre deux)
+                T_wc, T_wl = np.array(rgb_d.transform.get_matrix()), np.array(lid_d.transform.get_matrix())
+                pts, _ = lidar_points(lid_d, T_wc, T_wl)
+                uv, depth = project_lidar(pts, T_wl, T_wc, K, CFG.img_w, CFG.img_h, CFG.lidar_pos[2])
+
+                t0 = time.time()
+                r = model.predict(img, imgsz=args.imgsz, conf=args.conf, classes=[0], device=device, verbose=False)[0]
+                infer_ms.append(1000 * (time.time() - t0))
+                meas, dets = [], []
+                for b, c in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()):
+                    d_l, n_c = fuse_box(uv, depth, b)
+                    if d_l is None:
+                        continue
+                    u_c = (b[0] + b[2]) / 2
+                    meas.append((d_l - cam_to_bumper, (u_c - K[0, 2]) * d_l / K[0, 0]))
+                    dets.append((b, d_l, n_c))
+                if faults.active:
+                    meas = faults.apply(meas, ev, pdt)
+                tracks = tracker.step(meas)
+                out = aeb.step(tracks, ev)
             if out.warning and t_warn is None:
                 t_warn = t
             if out.brake > 0 and t_brake is None:
@@ -319,7 +333,7 @@ def main():
                         "ttc": round(out.ttc, 3) if out.ttc is not None else "",
                         "a_req": round(out.a_req, 3) if np.isfinite(out.a_req) else "inf",
                         "state": out.state_name, "brake": out.brake})
-            if i % 4 == 0:
+            if i % args.frame_every == 0:
                 ann = img.copy()
                 for b, d_l, n_c in dets:
                     cv2.rectangle(ann, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), STATE_COLOR[out.state], 2)
@@ -327,14 +341,21 @@ def main():
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, STATE_COLOR[out.state], 2)
                 cv2.putText(ann, f"{out.state_name}  ego {ev * 3.6:.0f} km/h  gap {g:.1f} m", (10, 24),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, STATE_COLOR[out.state], 2)
-                cv2.imwrite(str(run_dir / "frames" / f"{i:05d}.jpg"), ann)
-                cv2.imwrite(str(run_dir / "latest.tmp.jpg"), ann)
+                ok_, buf = cv2.imencode(".jpg", ann, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                name = f"{i:05d}.jpg"
+                (run_dir / "frames" / name).write_bytes(buf.tobytes())
+                (run_dir / "latest.tmp.jpg").write_bytes(buf.tobytes())
                 (run_dir / "latest.tmp.jpg").replace(run_dir / "latest.jpg")
-                write_json(run_dir / "latest.json", {
-                    "t": round(t, 2), "ego_kmh": round(ev * 3.6, 1), "lead_kmh": round(vlv * 3.6, 1),
-                    "gap_true": round(g, 2), "meas_range": log[-1]["meas_range"], "state": out.state_name,
-                    "a_req": log[-1]["a_req"], "brake": out.brake, "n_det": len(dets), "n_tracks": len(tracks)})
+                rec = {"idx": k_img, "img": name, "t": round(t, 2), "ego_kmh": round(ev * 3.6, 1),
+                       "lead_kmh": round(vlv * 3.6, 1), "gap_true": round(g, 2),
+                       "meas_range": log[-1]["meas_range"], "state": out.state_name,
+                       "a_req": log[-1]["a_req"], "brake": out.brake, "n_det": len(dets), "n_tracks": len(tracks)}
+                k_img += 1
+                jl.write(json.dumps(rec) + "\n")
+                jl.flush()
+                write_json(run_dir / "latest.json", rec)
                 status["t"] = round(t, 2)
+                status["n_frames"] = k_img
                 write_json(run_dir / "status.json", status)
 
             if lead.id in col_events:
@@ -352,7 +373,7 @@ def main():
                 break
         status["state"] = "stopped" if user_stop else "finished"
         summary.update({
-            "stopped_by_user": user_stop,
+            "stopped_by_user": user_stop, "n_ghost_frames": faults.n_ghost_frames,
             "collided": collided, "impact_speed_kmh": round(impact * 3.6, 1), "min_gap_m": round(min_gap, 2),
             "gap_start_m": round(gap_start, 2), "t_first_warning_s": t_warn, "t_first_brake_s": t_brake,
             "ego_final_speed_kmh": round(log[-1]["ego_v"] * 3.6, 1) if log else None,
@@ -387,6 +408,7 @@ def main():
             print(f"nettoyage incomplet : {e}", file=sys.stderr)
         (run_dir / "summary.json").write_text(json.dumps(summary, indent=1))
         write_json(run_dir / "status.json", status)
+        jl.close()
         print(json.dumps(summary, indent=1))
 
 

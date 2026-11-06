@@ -2,6 +2,7 @@
 from .tracker import Tracker, Track
 from .aeb import AEB, AEBConfig, AEBOutput, NORMAL, WARNING, PARTIAL_BRAKING, EMERGENCY_BRAKING
 from .kinematics import simulate, SimResult
+from .faults import FaultInjector
 
 __all__ = ["Tracker", "Track", "AEB", "AEBConfig", "AEBOutput", "NORMAL", "WARNING",
-           "PARTIAL_BRAKING", "EMERGENCY_BRAKING", "simulate", "SimResult"]
+           "PARTIAL_BRAKING", "EMERGENCY_BRAKING", "simulate", "SimResult", "FaultInjector"]

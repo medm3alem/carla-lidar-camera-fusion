@@ -40,6 +40,13 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:4px 6px;b
 <label>Vitesse de la cible (km/h, braking / follow / approach)</label><input id="lead_speed" type="number" value="50" min="5" max="90">
 <label>Instant du freinage de la cible (s, braking)</label><input id="lead_brake_t" type="number" value="3" min="0" max="20" step="0.5">
 <label><input id="aeb" type="checkbox" checked>AEB activé (décocher = témoin)</label>
+<label>Fréquence perception + AEB</label><select id="perception_hz"><option value="20">20 Hz (référence)</option><option value="10">10 Hz</option><option value="5">5 Hz</option></select>
+<details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Injection de défauts (test de robustesse)</summary>
+<label>Fausse détection : probabilité par image</label><input id="ghost_prob" type="number" value="0" min="0" max="0.2" step="0.005">
+<label>Fausse détection : durée (images)</label><input id="ghost_len" type="number" value="2" min="1" max="30">
+<label>Perte de mesure : probabilité</label><input id="drop_prob" type="number" value="0" min="0" max="0.9" step="0.05">
+<label>Bruit sur la distance (m, écart-type)</label><input id="noise_sigma" type="number" value="0" min="0" max="2" step="0.1">
+</details>
 </div>
 <div id="g_obs" class="hide">
 <label>Véhicules de trafic</label><input id="n_npc" type="number" value="70" min="0" max="150">
@@ -69,7 +76,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:4px 6px;b
 <div class="muted" style="margin-top:6px">Données dans <code>runs\studio\&lt;run&gt;\</code> (summary.json, log.csv pour l'AEB, images annotées).</div></section>
 </main>
 <script>
-const $=id=>document.getElementById(id);let cur=null,ws=null,curKind='aeb';
+const $=id=>document.getElementById(id);let cur=null,ws=null,curKind='aeb',queue=[],timer=null,lastT=null;
 const SC={NORMAL:0,WARNING:1,PARTIAL_BRAKING:2,EMERGENCY_BRAKING:3};
 const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 async function api(p,o){const r=await fetch(p,o);if(!r.ok){let d=await r.text();try{d=JSON.parse(d).detail}catch{}throw new Error(d)}return r.json()}
@@ -110,6 +117,13 @@ function plot(l){const c=$('plot');c.classList.remove('hide');const dpr=devicePi
  panel(36,(H-24)/2+18,[{n:'ego',c:css('--acc'),v:l.ego_v.map(v=>v*3.6)},{n:'cible',c:css('--s1'),v:l.lead_v.map(v=>v*3.6)}],'vitesse','km/h');
  panel((H-24)/2+30,H-18,[{n:'écart réel',c:css('--ok'),v:l.gap_true}],'écart','m');
  x.fillStyle=fg;x.fillText('0',L,H-5);x.fillText(T.toFixed(1)+' s',R-30,H-5)}
+function play(){timer=null;if(!queue.length)return;
+ while(queue.length>12)queue.shift();                       // retard trop grand : on saute les plus anciennes
+ const m=queue.shift();show(m);const f=m.frame;let d=100;
+ if(f&&f.t!=null){if(lastT!=null)d=Math.min(500,Math.max(40,(f.t-lastT)*1000));lastT=f.t}
+ if(queue.length>6)d*=0.6;else if(queue.length<2)d*=1.4;    // rattrape ou ralentit selon la mémoire tampon
+ timer=setTimeout(play,d)}
+function enqueue(m){queue.push(m);if(!timer)timer=setTimeout(play,150)}
 function show(m){const st=m.status;$('state').textContent=`— ${st.state}`+(curKind==='observe'?`, ${st.n_frames} images`:'')+(st.error?` — ${st.error}`:'');
  $('state').className=st.error?'err':'muted';
  if(m.image)$('view').src='data:image/jpeg;base64,'+m.image;
@@ -122,11 +136,11 @@ function show(m){const st=m.status;$('state').textContent=`— ${st.state}`+(cur
 $('start').onclick=async()=>{$('msg').textContent='';const k=$('kind').value;
  const body={kind:k,town:$('town').value,weather:$('weather').value,seed:+$('seed').value,conf:+$('conf').value,
   n_npc:+$('n_npc').value,seconds:+$('seconds').value,model:$('model').value,
-  scenario:$('scenario').value,v0:+$('v0').value,gap:+$('gap').value,lead_speed:+$('lead_speed').value,lead_brake_t:+$('lead_brake_t').value,aeb:$('aeb').checked};
+  scenario:$('scenario').value,v0:+$('v0').value,gap:+$('gap').value,lead_speed:+$('lead_speed').value,lead_brake_t:+$('lead_brake_t').value,aeb:$('aeb').checked,perception_hz:+$('perception_hz').value,ghost_prob:+$('ghost_prob').value,ghost_len:+$('ghost_len').value,drop_prob:+$('drop_prob').value,noise_sigma:+$('noise_sigma').value};
  try{const r=await api('/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   setMode(k);$('result').classList.add('hide');$('plot').classList.add('hide');
   cur=r.run_id;$('start').disabled=true;$('stop').disabled=false;$('state').textContent='— démarrage (chargement de la carte et du modèle)…';
-  if(ws)ws.close();ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/runs/'+cur);ws.onmessage=e=>show(JSON.parse(e.data));
+  if(ws)ws.close();ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/runs/'+cur);queue=[];lastT=null;if(timer){clearTimeout(timer);timer=null}ws.onmessage=e=>enqueue(JSON.parse(e.data));
  }catch(e){$('msg').innerHTML=`<span class="err">${e.message}</span>`}};
 $('stop').onclick=()=>cur&&api(`/api/runs/${cur}/stop`,{method:'POST'});
 init();
