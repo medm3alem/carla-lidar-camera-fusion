@@ -21,53 +21,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from fusion.config import CFG
 from fusion import geometry as geo
+from fusion.perception import (box_iou, boxes_of, fuse_box, mono_depth, project_lidar,
+                               GROUND_MARGIN, INNER, MONO_HEIGHT)
 
 BINS = [(0, 20), (20, 40), (40, 60)]
 EST_BINS = BINS + [(60, 1e9)]
 COCO_VEHICLES = [2, 5, 7]
-GROUND_MARGIN = 0.30     # m au-dessus du sol (repère LiDAR : le capteur est à CFG.lidar_pos[2] du sol)
-INNER = 0.6              # fraction centrale de la boîte où l'on cherche les points
-MONO_HEIGHT = 1.5        # m, hauteur de véhicule supposée pour la baseline caméra seule
 THRESHOLDS = [0, 3, 5, 10, 20]
-
-
-def box_iou(a, b):
-    """IoU (N,M) et IoA = intersection / aire de a (N,M)."""
-    a = np.asarray(a, float).reshape(-1, 4)
-    b = np.asarray(b, float).reshape(-1, 4)
-    ix0 = np.maximum(a[:, None, 0], b[None, :, 0])
-    iy0 = np.maximum(a[:, None, 1], b[None, :, 1])
-    ix1 = np.minimum(a[:, None, 2], b[None, :, 2])
-    iy1 = np.minimum(a[:, None, 3], b[None, :, 3])
-    inter = np.clip(ix1 - ix0, 0, None) * np.clip(iy1 - iy0, 0, None)
-    area_a = (a[:, 2] - a[:, 0]) * (a[:, 3] - a[:, 1])
-    area_b = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
-    iou = inter / np.maximum(area_a[:, None] + area_b[None, :] - inter, 1e-9)
-    ioa = inter / np.maximum(area_a[:, None], 1e-9)
-    return iou, ioa
-
-
-def boxes_of(objs):
-    return np.array([[o["box2d"][0], o["box2d"][1], o["box2d"][2] + 1, o["box2d"][3] + 1]
-                     for o in objs], float).reshape(-1, 4)
-
-
-def lidar_in_box(uv, depth, box):
-    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
-    hw, hh = (box[2] - box[0]) / 2 * INNER, (box[3] - box[1]) / 2 * INNER
-    m = (np.abs(uv[:, 0] - cx) <= hw) & (np.abs(uv[:, 1] - cy) <= hh)
-    return depth[m]
-
-
-def front_cluster(d, gap=1.0, min_pts=3):
-    """Premier groupe (le plus proche) d'au moins min_pts profondeurs, séparé du suivant par > gap m."""
-    if len(d) < min_pts:
-        return None, 0
-    d = np.sort(d)
-    for grp in np.split(d, np.flatnonzero(np.diff(d) > gap) + 1):
-        if len(grp) >= min_pts:
-            return float(np.median(grp)), len(grp)
-    return None, 0
 
 
 def main():
@@ -122,10 +82,7 @@ def main():
 
         pts = np.load(lidar_path)
         T_wc, T_wl = np.array(fr["T_world_cam"]), np.array(fr["T_world_lidar"])
-        pc = geo.transform_points(geo.lidar_to_camera_matrix(T_wl, T_wc), pts[:, :3])
-        uv, depth, src = geo.project(pc, K, CFG.img_w, CFG.img_h)
-        keep = pts[src, 2] > -CFG.lidar_pos[2] + GROUND_MARGIN      # retire le sol
-        uv, depth = uv[keep], depth[keep]
+        uv, depth = project_lidar(pts, T_wl, T_wc, K, CFG.img_w, CFG.img_h, CFG.lidar_pos[2], GROUND_MARGIN)
 
         used = np.zeros(len(gts), bool)
         iou_g = box_iou(P, G)[0] if len(P) and len(G) else np.zeros((len(P), len(G)))
@@ -143,8 +100,8 @@ def main():
             else:
                 status = "fp"
             box = P[pi]
-            d_lidar, n_clu = front_cluster(lidar_in_box(uv, depth, box))
-            mono = float(K[0, 0] * MONO_HEIGHT / max(box[3] - box[1], 1.0))
+            d_lidar, n_clu = fuse_box(uv, depth, box)
+            mono = mono_depth(K, box, MONO_HEIGHT)
             rows.append({
                 "weather": weather, "episode": ep, "idx": idx, "status": status, "conf": float(C[pi]),
                 "gt_dist": gts[gt]["distance"] if gt is not None else None,
