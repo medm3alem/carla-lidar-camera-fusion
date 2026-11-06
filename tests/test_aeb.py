@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from fusion.adas import (AEB, AEBConfig, EMERGENCY_BRAKING, NORMAL, Tracker, simulate)
+from fusion.adas import (AEB, AEBConfig, EMERGENCY_BRAKING, NORMAL, PARTIAL_BRAKING, Tracker, simulate)
 
 
 def run_tracker(ranges, dt=0.05, y=0.0):
@@ -116,3 +116,32 @@ def test_banc_cible_qui_freine_avec_anticipation():
         r = simulate(v0_kmh=50, gap0=30, lead_speed_kmh=50, lead_brake_t=2.0, lead_decel=5.0, fps=20,
                      dropout=0.1, seed=seed, cfg=cfg, tracker_model="ca", jerk=2.0)
         assert not r.collided
+
+
+class _Piste:
+    def __init__(self, rng, closing):
+        self.id, self.range, self.lateral, self.closing_speed, self.rel_accel = 1, rng, 0.0, closing, 0.0
+
+
+def _tient_le_frein(hysteresis):
+    aeb = AEB(AEBConfig(hysteresis=hysteresis), dt=0.05)
+    for _ in range(4):                                    # a_req = 2,63 m/s^2 : freinage partiel
+        out = aeb.step([_Piste(24.0, 10.0)], 12.0)
+    assert out.state == PARTIAL_BRAKING
+    for _ in range(60):                                   # le freinage réussit : a_req ~ 2,4, sous le seuil 2,5
+        out = aeb.step([_Piste(17.6, 8.0)], 8.0)          # obstacle à plus de hold_range
+    return out.state
+
+
+def test_aeb_hysteresis_ne_relache_pas_quand_a_req_oscille_sous_le_seuil():
+    assert _tient_le_frein(0.7) == PARTIAL_BRAKING
+    assert _tient_le_frein(1.0) < PARTIAL_BRAKING         # sans hystérésis : le frein est relâché (cas CARLA 50 km/h)
+
+
+def test_aeb_relache_quand_la_menace_disparait():
+    aeb = AEB(dt=0.05)
+    for _ in range(4):
+        aeb.step([_Piste(24.0, 10.0)], 12.0)
+    for _ in range(40):
+        out = aeb.step([_Piste(40.0, 3.0)], 6.0)          # a_req ~ 0,1 : menace levée
+    assert out.state == NORMAL

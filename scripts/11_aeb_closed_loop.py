@@ -124,9 +124,10 @@ def main():
     ap.add_argument("--a-emergency", type=float, default=None, help="seuil de freinage d'urgence (m/s2)")
     ap.add_argument("--t-latency", type=float, default=None, help="latence supposée (s)")
     ap.add_argument("--brake-partial", type=float, default=None, help="consigne de frein en freinage partiel")
-    ap.add_argument("--tracker", choices=["cv", "ca"], default="cv", help="modèle du tracker (ca = accélération constante)")
+    ap.add_argument("--tracker", choices=["cv", "ca"], default="ca", help="modèle du tracker (défaut ca = accélération constante ; cv = ancienne référence)")
     ap.add_argument("--jerk", type=float, default=2.0, help="bruit de saccade du tracker ca (m/s^3)")
-    ap.add_argument("--lead-decel", action="store_true", help="anticipe l'arrêt d'une cible qui freine (exige --tracker ca)")
+    ap.add_argument("--lead-decel", action=argparse.BooleanOptionalAction, default=None,
+                    help="anticipe l'arrêt d'une cible qui freine (exige --tracker ca ; actif par défaut avec ca)")
     ap.add_argument("--town", default="Town10HD_Opt")
     ap.add_argument("--weather", default="clear", choices=list(WEATHER))
     ap.add_argument("--seed", type=int, default=42)
@@ -227,7 +228,8 @@ def main():
         ov = {k: v for k, v in (("a_warn", args.a_warn), ("a_partial", args.a_partial),
                                 ("a_emergency", args.a_emergency), ("t_latency", args.t_latency),
                                 ("brake_partial", args.brake_partial)) if v is not None}
-        if args.lead_decel:
+        lead_decel = (args.tracker == "ca") if args.lead_decel is None else args.lead_decel
+        if lead_decel:
             if args.tracker != "ca":
                 raise RuntimeError("--lead-decel exige --tracker ca")
             ov["use_lead_decel"] = True

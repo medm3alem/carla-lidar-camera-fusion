@@ -40,6 +40,10 @@ class AEBConfig:
     confirm_frames: int = 2
     release_hold_s: float = 1.0
     hold_range: float = 15.0
+    # Hystérésis de désescalade : un niveau n'est quitté que si la décélération requise tombe sous
+    # `hysteresis` x son seuil (sinon un freinage qui réussit fait osciller a_req autour du seuil, relâche
+    # le frein à 16 m d'un obstacle fixe à 7,5 m/s, et il faut ensuite freiner plus fort : essai CARLA, 50 km/h).
+    hysteresis: float = 0.7
     stopped_speed: float = 0.5
     # Anticipation d'une cible qui freine (nécessite Tracker(model="ca")) : désactivée par défaut
     use_lead_decel: bool = False
@@ -84,15 +88,16 @@ class AEB:
         room = rng - closing * c.t_latency - c.stop_margin
         return float("inf") if room <= 0 else closing ** 2 / (2.0 * room)
 
-    def _raw_level(self, ttc, a_req):
+    def _raw_level(self, ttc, a_req, scale=1.0):
+        """Niveau demandé ; `scale` < 1 abaisse les seuils (niveau de maintien, pour l'hystérésis)."""
         c = self.cfg
         if ttc is None:
             return NORMAL
-        if a_req >= c.a_emergency:
+        if a_req >= c.a_emergency * scale:
             return EMERGENCY_BRAKING
-        if a_req >= c.a_partial:
+        if a_req >= c.a_partial * scale:
             return PARTIAL_BRAKING
-        if a_req >= c.a_warn or ttc < c.ttc_warn:
+        if a_req >= c.a_warn * scale or ttc < c.ttc_warn:
             return WARNING
         return NORMAL
 
@@ -110,7 +115,7 @@ class AEB:
         self._prev_v = ego_speed
         in_path = [t for t in tracks if 0 < t.range < c.max_range and abs(t.lateral) < c.corridor_half_width]
         threats = [t for t in in_path if t.closing_speed > c.min_closing]
-        target, ttc, a_req, raw = None, None, 0.0, NORMAL
+        target, ttc, a_req, raw, hold = None, None, 0.0, NORMAL, NORMAL
         for t in threats:
             v = t.range / t.closing_speed
             a = self.required_decel(t.range, t.closing_speed)
@@ -122,6 +127,7 @@ class AEB:
                 if n >= c.lead_decel_frames:
                     a = max(a, self.required_decel_lead_stop(t.range, ego_speed, vl, al))
             lvl = self._raw_level(v, a)
+            hold = max(hold, self._raw_level(v, a, c.hysteresis))
             if target is None or lvl > raw or (lvl == raw and v < ttc):
                 target, ttc, a_req, raw = t, v, a, lvl
 
@@ -129,12 +135,12 @@ class AEB:
         if len(self.hist) == self.hist.maxlen and min(self.hist) > self.state:
             self.state = min(self.hist)
             self.below_time = 0.0
-        elif raw < self.state:
+        elif hold < self.state:
             obstacle_close = any(t.range < c.hold_range and t.closing_speed > -c.min_closing for t in in_path)
             if not obstacle_close:
                 self.below_time += self.dt
                 if self.below_time >= c.release_hold_s:
-                    self.state = raw
+                    self.state = hold
                     self.below_time = 0.0
             else:
                 self.below_time = 0.0

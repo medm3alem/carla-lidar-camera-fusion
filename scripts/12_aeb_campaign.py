@@ -16,6 +16,7 @@ import json
 import shlex
 import subprocess
 import sys
+import statistics
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -120,13 +121,13 @@ def main():
             print(f"{v0:>6.0f} km/h{'AEB':>10}{len(rs):>8}{nb:>9}/{len(rs):<5}{nw:>20}/{len(rs)}")
         print(f"\nrésultats : {res_path}")
         return
-    print(f"\n{'vitesse':>8}{'mode':>10}{'essais':>8}{'collisions':>12}{'impact moy.':>13}{'écart min méd.':>16}{'v réelle départ':>17}")
+    print(f"\n{'vitesse':>8}{'mode':>10}{'essais':>8}{'collisions':>12}{'impact moy.':>13}{'écart min méd.':>16}{'écart pire':>12}{'v réelle départ':>17}")
     for (v0, aeb), rs in sorted(agg.items()):
         col = [str(r["collided"]) in ("True", "true") for r in rs]
         imp = [float(r["impact_kmh"]) for r, c in zip(rs, col) if c]
         gaps = sorted(float(r["min_gap_m"]) for r in rs)
         print(f"{v0:>6.0f} km/h{'AEB' if aeb else 'témoin':>10}{len(rs):>8}{sum(col):>6}/{len(rs):<5}"
-              f"{(sum(imp) / len(imp) if imp else 0):>11.1f}{gaps[len(gaps) // 2]:>16.1f}"
+              f"{(sum(imp) / len(imp) if imp else 0):>11.1f}{statistics.median(gaps):>16.1f}{gaps[0]:>12.1f}"
               f"{sum(float(r['v_start_kmh'] or 0) for r in rs) / len(rs):>17.1f}")
     n_err = sum(1 for r in rows if r.get("error") not in ("", None))
     print(f"\nrésultats : {res_path}" + (f"   ({n_err} essais en erreur)" if n_err else ""))

@@ -1,0 +1,13 @@
+case,scenario,v0,gap,weather,seed,aeb,collided,impact_kmh,min_gap_m,gap_start_m,t_warn,t_brake,final_speed_kmh,v_start_kmh,v_brake_kmh,n_brake_ticks,max_state,error
+v30_clear_s42_aeb,stopped,30.0,50.0,clear,42,True,False,0.0,11.95,49.99,2.9000000000000004,3.95,0.0,30.2,29.9,40,PARTIAL_BRAKING,
+v50_clear_s42_aeb,stopped,50.0,50.0,clear,42,True,False,0.0,9.18,49.99,0.25,0.55,0.0,50.1,48.8,97,PARTIAL_BRAKING,
+v70_clear_s42_aeb,stopped,70.0,50.0,clear,42,True,False,0.0,4.31,49.99,0.2,0.2,0.0,70.1,68.5,91,EMERGENCY_BRAKING,
+v30_clear_s43_aeb,stopped,30.0,50.0,clear,43,True,False,0.0,12.16,49.97,2.85,3.95,0.0,30.2,29.9,39,PARTIAL_BRAKING,
+v50_clear_s43_aeb,stopped,50.0,50.0,clear,43,True,False,0.0,9.1,49.97,0.25,0.55,0.0,50.1,48.8,97,PARTIAL_BRAKING,
+v70_clear_s43_aeb,stopped,70.0,50.0,clear,43,True,False,0.0,4.13,49.97,0.2,0.2,0.0,70.1,68.5,92,EMERGENCY_BRAKING,
+v30_clear_s44_aeb,stopped,30.0,50.0,clear,44,True,False,0.0,11.94,49.99,2.9000000000000004,3.95,0.0,30.2,29.9,40,PARTIAL_BRAKING,
+v50_clear_s44_aeb,stopped,50.0,50.0,clear,44,True,False,0.0,9.18,49.99,0.25,0.55,0.0,50.1,48.8,97,PARTIAL_BRAKING,
+v70_clear_s44_aeb,stopped,70.0,50.0,clear,44,True,False,0.0,4.3,49.99,0.2,0.2,0.0,70.1,68.5,91,EMERGENCY_BRAKING,
+v30_clear_s45_aeb,stopped,30.0,50.0,clear,45,True,False,0.0,11.86,50.03,2.85,3.95,0.0,30.2,30.0,41,PARTIAL_BRAKING,
+v50_clear_s45_aeb,stopped,50.0,50.0,clear,45,True,False,0.0,9.16,50.03,0.25,0.55,0.0,50.1,48.8,97,PARTIAL_BRAKING,
+v70_clear_s45_aeb,stopped,70.0,50.0,clear,45,True,False,0.0,4.35,50.03,0.2,0.2,0.0,70.1,68.5,91,EMERGENCY_BRAKING,
