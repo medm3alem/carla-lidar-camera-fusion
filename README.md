@@ -109,9 +109,16 @@ sont dans reference/.
   ils ne constituent pas une validation statistique ni une homologation.
 - Le LiDAR CARLA n'est pas dégradé par pluie/brouillard : l'axe météo ne teste que la caméra.
 - Modèles de véhicules identiques entre train et test ; baseline caméra seule naïve (hauteur fixe 1,5 m).
-- L'AEB est validé à 20 Hz ; le Worker web actuel tourne à 5 Hz, où le banc cinématique donne des collisions
-  à haute vitesse. Pas encore de test avec bruit capteur ou fausses détections injectées.
+- L'AEB est validé à 20 Hz. À 5 Hz (Worker d'observation web, sans AEB), la marge est mince à 70 km/h sur cible
+  arrêtée : écart minimal ≈ 2,4 m en 16 lancements sans collision, mais 1 collision (impact 16 km/h) observée une fois
+  sur la graine 42 dans un autre lot, non reproduite (cause non élucidée : variabilité du simulateur ou marge). Ne pas
+  revendiquer 0 collision à 5 Hz et 70 km/h.
+- Fausses détections : seul un modèle de défauts simple est testé (voir plus haut) ; pas de bruit capteur réaliste.
 - Les freinages parasites ne sont mesurés que sur trois scénarios simples, pas sur du trafic réel.
-- Cas ouvert : à 5 Hz, en passant à côté d'une cible arrêtée dans la voie voisine (50 km/h), un freinage d'urgence
-  parasite est apparu sur 2 essais de la graine 43, puis pas sur un troisième ; cause non identifiée (hypothèse : position
-  latérale erronée quand la boîte est tronquée au bord de l'image). Ni à 10 Hz ni à 20 Hz.
+- Cas corrigé : à 5 Hz, en passant à côté d'une cible arrêtée dans la voie voisine (50 km/h, graine 43), un freinage
+  d'urgence parasite apparaissait dans 4 lancements sur 6. Cause trouvée en rejouant le journal : une fausse piste née
+  de deux détections proches recevait une vitesse latérale initiale d'environ -5 m/s (a priori trop large, 8 m/s), et
+  dérivait dans le couloir pendant 3 images. L'a priori latéral est ramené à 2 m/s (`vy_init_std`) ; test de
+  non-régression `test_depassement_a_5hz_...`. En CARLA : 0 freinage sur 8 lancements de la graine 43, et 0/18 sur
+  les graines 42 à 47 à 30 / 50 / 70 km/h. Mesure latérale par points LiDAR (`--lateral-source lidar`, défaut) :
+  n'a pas résolu le problème à elle seule.
