@@ -3,6 +3,7 @@ Banc de validation cinématique 1D (sans CARLA) : un ego freiné par l'AEB appro
 Ce n'est PAS une simulation de conduite : points matériels, freinage à décélération bornée avec délai
 d'actionnement, perception émulée (mesure de distance bruitée à la cadence de la caméra).
 Sert à vérifier la logique du tracker et de l'AEB et à régler les seuils avant la boucle fermée CARLA.
+a_max = 5 m/s^2 : ordre de grandeur mesuré dans CARLA (4 à 6 m/s^2 à frein 100 %), pas une valeur de route réelle.
 """
 from dataclasses import dataclass
 from typing import Optional
@@ -25,7 +26,7 @@ class SimResult:
 
 
 def simulate(v0_kmh=50.0, gap0=50.0, lead_speed_kmh=0.0, lead_brake_t=None, lead_decel=6.0,
-             fps=20.0, sigma=0.3, dropout=0.0, act_delay=0.2, a_max=8.0, lateral=0.0,
+             fps=20.0, sigma=0.3, dropout=0.0, act_delay=0.2, a_max=5.0, lateral=0.0,
              detect_range=60.0, cfg: AEBConfig = AEBConfig(), seed=0, t_max=20.0, dangerous=True):
     rng = np.random.default_rng(seed)
     v, vl = v0_kmh / 3.6, lead_speed_kmh / 3.6

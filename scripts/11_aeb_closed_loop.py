@@ -7,6 +7,8 @@ Scénarios
   braking  : véhicule cible roulant à --lead-speed, qui freine à t = --lead-brake-t
   adjacent : véhicule à l'arrêt décalé de --lateral m (voie voisine) : l'ego doit passer SANS freiner
   follow   : véhicule devant à --lead-speed constante, sans freiner : l'ego ne doit PAS freiner
+  approach : l'ego, avec un régulateur de distance (ralentit seul, décélération douce), s'approche d'un
+             véhicule plus lent (--lead-speed) : conduite normale, l'AEB ne doit PAS freiner
 Chaque tick (20 Hz) : capteurs -> YOLO -> LiDAR -> tracker -> AEB -> commande de l'ego.
 Sorties : runs\aeb\<id>\ log.csv (une ligne par tick), summary.json, frames\ (images annotées à ~5 Hz).
 
@@ -108,7 +110,7 @@ class SpeedCtl:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--scenario", choices=["stopped", "braking", "adjacent", "follow"], default="stopped")
+    ap.add_argument("--scenario", choices=["stopped", "braking", "adjacent", "follow", "approach"], default="stopped")
     ap.add_argument("--v0", type=float, default=50.0, help="vitesse de l'ego, km/h")
     ap.add_argument("--gap", type=float, default=80.0, help="écart initial (pare-chocs à pare-chocs), m")
     ap.add_argument("--lead-speed", type=float, default=50.0, help="km/h (scénario braking)")
@@ -158,11 +160,11 @@ def main():
         world.set_weather(WEATHER[args.weather])
 
         v0 = args.v0 / 3.6
-        vl = args.lead_speed / 3.6 if args.scenario in ("braking", "follow") else 0.0
+        vl = args.lead_speed / 3.6 if args.scenario in ("braking", "follow", "approach") else 0.0
         # route nécessaire : écart initial + trajet de la cible + marge pour que l'ego s'arrête
         if args.scenario == "braking":
             need = args.gap + 5.0 + vl * args.lead_brake_t + vl ** 2 / (2 * 4.0) + 25.0
-        elif args.scenario == "follow":
+        elif args.scenario in ("follow", "approach"):
             need = args.gap + 5.0 + vl * args.follow_seconds + 15.0
         elif args.scenario == "adjacent":
             need = args.gap + 5.0 + 20.0
@@ -239,7 +241,7 @@ def main():
         gap_start = min_gap
         stopped_ticks = 0
         last_ev, last_vl = speed_of(ego.get_velocity()), speed_of(lead.get_velocity())
-        t_run = args.follow_seconds if args.scenario == "follow" else args.t_max
+        t_run = args.follow_seconds if args.scenario in ("follow", "approach") else args.t_max
         n_ticks = int(t_run / CFG.dt)
         out = None
         for i in range(1, n_ticks + 1):
@@ -271,6 +273,11 @@ def main():
                 t_warn = t
             if out.brake > 0 and t_brake is None:
                 t_brake = t
+            if args.scenario == "approach":                      # régulateur de distance, décélération douce
+                g_now = true_gap()
+                v_t = min(v0, max(0.0, vlv + 0.5 * (g_now - (6.0 + 1.2 * ev))))
+                step = 1.5 * CFG.dt
+                ego_ctl.target += float(np.clip(v_t - ego_ctl.target, -step, step))
             if args.no_aeb or out.brake <= 0:
                 ego.apply_control(ego_ctl(ego, cmap))
             else:
@@ -305,7 +312,7 @@ def main():
             if args.scenario == "adjacent":
                 if g < -10.0:                                # l'ego a dépassé la cible
                     break
-            elif args.scenario != "follow" and g < -1.0:
+            elif args.scenario not in ("follow", "approach") and g < -1.0:
                 collided, impact = True, max(ev - vlv, 0.0)
                 break
         summary.update({

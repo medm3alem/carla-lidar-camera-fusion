@@ -60,7 +60,7 @@ def main():
     ap.add_argument("--weathers", nargs="+", default=["clear", "rain", "fog"])
     ap.add_argument("--seeds", type=int, nargs="+", default=[42])
     ap.add_argument("--gap", type=float, default=50.0)
-    ap.add_argument("--scenario", choices=["stopped", "braking", "adjacent", "follow"], default="stopped")
+    ap.add_argument("--scenario", choices=["stopped", "braking", "adjacent", "follow", "approach"], default="stopped")
     ap.add_argument("--lead-speed", type=float, default=30.0, help="km/h (braking, follow)")
     ap.add_argument("--town", default="Town10HD_Opt")
     ap.add_argument("--resume", default=None, help="id d'une campagne à reprendre")
@@ -101,7 +101,7 @@ def main():
     for r in rows:
         if r.get("error") in ("", None):
             agg[(float(r["v0"]), str(r["aeb"]) in ("True", "true"))].append(r)
-    if args.scenario in ("adjacent", "follow"):
+    if args.scenario in ("adjacent", "follow", "approach"):
         print(f"\nScénario non dangereux '{args.scenario}' : tout freinage est une fausse activation")
         print(f"{'vitesse':>8}{'mode':>10}{'essais':>8}{'avec freinage':>15}{'alertes (état>=WARNING)':>26}")
         g2 = defaultdict(list)

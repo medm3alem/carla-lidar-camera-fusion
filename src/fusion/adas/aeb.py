@@ -28,17 +28,24 @@ class AEBConfig:
     max_range: float = 60.0
     min_closing: float = 0.5             # m/s : en dessous, pas de menace
     ttc_warn: float = 2.6                # alerte seulement
-    a_warn: float = 2.0                  # m/s^2 : décélération requise -> alerte
-    a_partial: float = 4.0               # -> freinage partiel
-    a_emergency: float = 6.0             # -> freinage d'urgence (a_max supposé ~8 m/s^2)
+    # Seuils calibrés sur la décélération mesurée de la voiture CARLA (4 à 6 m/s^2 à frein 100 %, et non 8).
+    # Voir AEBConfig.legacy() pour les valeurs initiales (calées sur 8 m/s^2), gardées pour comparaison.
+    a_warn: float = 1.5                  # m/s^2 : décélération requise -> alerte
+    a_partial: float = 2.5               # -> freinage partiel
+    a_emergency: float = 3.5             # -> freinage d'urgence
     t_latency: float = 0.4               # s : actionnement + traitement
     stop_margin: float = 1.0             # m : distance d'arrêt visée devant l'obstacle
-    brake_partial: float = 0.4
+    brake_partial: float = 0.6
     brake_emergency: float = 1.0
     confirm_frames: int = 2
     release_hold_s: float = 1.0
     hold_range: float = 15.0
     stopped_speed: float = 0.5
+
+    @classmethod
+    def legacy(cls):
+        """Seuils de la première version (a_max supposé 8 m/s^2) : référence de comparaison."""
+        return cls(a_warn=2.0, a_partial=4.0, a_emergency=6.0, brake_partial=0.4)
 
 
 @dataclass
