@@ -28,8 +28,9 @@ def fetch(q, frame, timeout=10.0):
             raise RuntimeError(f"frame {frame} manquante (reçu {data.frame})")
 
 
-def spawn_sensors(world, ego):
-    """RGB + segmentation d'instance + LiDAR attachés à l'ego. Retourne (capteurs, files)."""
+def spawn_sensors(world, ego, inst=True):
+    """RGB + segmentation d'instance + LiDAR attachés à l'ego. Retourne (capteurs, files).
+    inst=False : pas de caméra d'instance (inutile hors collecte, coûteuse en boucle fermée)."""
     bpl = world.get_blueprint_library()
     cam_tf = carla.Transform(carla.Location(*CFG.cam_pos))
     lid_tf = carla.Transform(carla.Location(*CFG.lidar_pos))
@@ -54,13 +55,16 @@ def spawn_sensors(world, ego):
         lb.set_attribute(k, str(v))
 
     rgb = world.spawn_actor(cam_bp("sensor.camera.rgb"), cam_tf, attach_to=ego)
-    inst = world.spawn_actor(cam_bp("sensor.camera.instance_segmentation"), cam_tf, attach_to=ego)
     lidar = world.spawn_actor(lb, lid_tf, attach_to=ego)
     queues = {k: queue.Queue() for k in ("rgb", "inst", "lidar")}
     rgb.listen(queues["rgb"].put)
-    inst.listen(queues["inst"].put)
     lidar.listen(queues["lidar"].put)
-    return [rgb, inst, lidar], queues
+    sensors = [rgb, lidar]
+    if inst:
+        seg = world.spawn_actor(cam_bp("sensor.camera.instance_segmentation"), cam_tf, attach_to=ego)
+        seg.listen(queues["inst"].put)
+        sensors.insert(1, seg)
+    return sensors, queues
 
 
 def lidar_points(lid_d, T_wc, T_wl):
