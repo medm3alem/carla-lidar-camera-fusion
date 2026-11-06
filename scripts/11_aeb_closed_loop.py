@@ -92,11 +92,18 @@ def lane_steer(veh, cmap):
     return float(np.clip((dyaw - math.degrees(math.atan2(0.8 * lat, v + 2.0))) / 70.0, -1, 1))
 
 
-def cruise(veh, cmap, target):
-    v = speed_of(veh.get_velocity())
-    u = 0.3 * (target - v)
-    return carla.VehicleControl(throttle=float(np.clip(u, 0, 0.75)), brake=float(np.clip(-u * 0.5, 0, 1)),
-                                steer=lane_steer(veh, cmap))
+class SpeedCtl:
+    """Régulateur PI de vitesse + suivi de voie (remplace un P pur qui laissait un écart de 10-25 %)."""
+
+    def __init__(self, target, kp=0.5, ki=0.4, dt=CFG.dt):
+        self.target, self.kp, self.ki, self.dt, self.i = target, kp, ki, dt, 0.0
+
+    def __call__(self, veh, cmap):
+        e = self.target - speed_of(veh.get_velocity())
+        self.i = float(np.clip(self.i + e * self.dt, -2.0, 2.0))
+        u = self.kp * e + self.ki * self.i
+        return carla.VehicleControl(throttle=float(np.clip(u, 0, 1)), brake=float(np.clip(-u * 0.5, 0, 1)),
+                                    steer=lane_steer(veh, cmap))
 
 
 def main():
@@ -110,6 +117,11 @@ def main():
     ap.add_argument("--lateral", type=float, default=3.5, help="décalage latéral de la cible (scénario adjacent), m")
     ap.add_argument("--follow-seconds", type=float, default=4.0, help="durée du scénario follow")
     ap.add_argument("--no-aeb", action="store_true")
+    ap.add_argument("--a-warn", type=float, default=None, help="seuil d'alerte (m/s2), défaut AEBConfig")
+    ap.add_argument("--a-partial", type=float, default=None, help="seuil de freinage partiel (m/s2)")
+    ap.add_argument("--a-emergency", type=float, default=None, help="seuil de freinage d'urgence (m/s2)")
+    ap.add_argument("--t-latency", type=float, default=None, help="latence supposée (s)")
+    ap.add_argument("--brake-partial", type=float, default=None, help="consigne de frein en freinage partiel")
     ap.add_argument("--town", default="Town10HD_Opt")
     ap.add_argument("--weather", default="clear", choices=list(WEATHER))
     ap.add_argument("--seed", type=int, default=42)
@@ -180,9 +192,7 @@ def main():
         actors.append(lead)
         ext_l = lead.bounding_box.extent.x
         fwd = wp0.transform.get_forward_vector()
-        ego.set_target_velocity(carla.Vector3D(fwd.x * v0, fwd.y * v0, 0))
-        if vl > 0:
-            lead.set_target_velocity(carla.Vector3D(fwd.x * vl, fwd.y * vl, 0))
+        ego_ctl, lead_ctl = SpeedCtl(v0), SpeedCtl(vl)
 
         col_events = []
         col = world.spawn_actor(bpl.find("sensor.other.collision"), carla.Transform(), attach_to=ego)
@@ -195,10 +205,13 @@ def main():
                 return carla.VehicleControl(brake=1.0, hand_brake=True)
             if args.scenario == "braking" and t >= args.lead_brake_t:
                 return carla.VehicleControl(brake=args.lead_brake, steer=lane_steer(lead, cmap))
-            return cruise(lead, cmap, vl)
+            return lead_ctl(lead, cmap)
 
-        for _ in range(5):                                   # mise en place (chute, vitesse)
-            ego.apply_control(cruise(ego, cmap, v0))
+        for _ in range(5):                                   # mise en place (chute) : vitesse initiale imposée
+            ego.set_target_velocity(carla.Vector3D(fwd.x * v0, fwd.y * v0, 0))
+            if vl > 0:
+                lead.set_target_velocity(carla.Vector3D(fwd.x * vl, fwd.y * vl, 0))
+            ego.apply_control(ego_ctl(ego, cmap))
             lead.apply_control(lead_control(0.0))
             frame = world.tick()
             for n in ("rgb", "lidar"):
@@ -206,7 +219,11 @@ def main():
 
         K = geo.intrinsics(CFG.img_w, CFG.img_h, CFG.fov)
         tracker = Tracker(CFG.dt)
-        aeb = AEB(AEBConfig(), CFG.dt)
+        ov = {k: v for k, v in (("a_warn", args.a_warn), ("a_partial", args.a_partial),
+                                ("a_emergency", args.a_emergency), ("t_latency", args.t_latency),
+                                ("brake_partial", args.brake_partial)) if v is not None}
+        aeb = AEB(AEBConfig(**ov), CFG.dt)
+        summary["aeb_overrides"] = ov
         cam_to_bumper = ext_e - CFG.cam_pos[0]               # la profondeur LiDAR est mesurée depuis la caméra
 
         def true_gap():
@@ -255,7 +272,7 @@ def main():
             if out.brake > 0 and t_brake is None:
                 t_brake = t
             if args.no_aeb or out.brake <= 0:
-                ego.apply_control(cruise(ego, cmap, v0))
+                ego.apply_control(ego_ctl(ego, cmap))
             else:
                 ego.apply_control(carla.VehicleControl(throttle=0.0, brake=out.brake, steer=lane_steer(ego, cmap)))
             lead.apply_control(lead_control(t))
@@ -297,6 +314,8 @@ def main():
             "ego_final_speed_kmh": round(log[-1]["ego_v"] * 3.6, 1) if log else None,
             "n_ticks": len(log), "infer_ms_median": round(float(np.median(infer_ms)), 1) if infer_ms else None,
             "aeb_enabled": not args.no_aeb, "error": None,
+            "ego_speed_start_kmh": round(log[0]["ego_v"] * 3.6, 1) if log else None,
+            "ego_speed_at_first_brake_kmh": next((round(r_["ego_v"] * 3.6, 1) for r_ in log if r_["brake"] > 0), None),
             "n_brake_ticks": sum(1 for r_ in log if r_["brake"] > 0),
             "n_warning_ticks": sum(1 for r_ in log if r_["state"] != "NORMAL"),
             "max_state": max((r_["state"] for r_ in log), key=["NORMAL", "WARNING", "PARTIAL_BRAKING",

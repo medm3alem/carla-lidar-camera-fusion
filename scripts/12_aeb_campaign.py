@@ -13,6 +13,7 @@ Durée : ~35 s par essai (6 cas par vitesse et par graine pour 3 météos x 2 mo
 import argparse
 import csv
 import json
+import shlex
 import subprocess
 import sys
 import time
@@ -21,7 +22,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FIELDS = ["case", "scenario", "v0", "gap", "weather", "seed", "aeb", "collided", "impact_kmh",
-          "min_gap_m", "gap_start_m", "t_warn", "t_brake", "final_speed_kmh", "n_brake_ticks", "max_state", "error"]
+          "min_gap_m", "gap_start_m", "t_warn", "t_brake", "final_speed_kmh", "v_start_kmh", "v_brake_kmh", "n_brake_ticks", "max_state", "error"]
 
 
 def run_case(py, args, v0, weather, seed, aeb, out_dir):
@@ -31,6 +32,7 @@ def run_case(py, args, v0, weather, seed, aeb, out_dir):
            "--town", args.town, "--out", str(out_dir)]
     if not aeb:
         cmd.append("--no-aeb")
+    cmd += shlex.split(args.aeb_opts)
     before = set(out_dir.glob("*/summary.json"))
     subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
     new = sorted(set(out_dir.glob("*/summary.json")) - before)
@@ -47,7 +49,8 @@ def to_row(case, args, v0, weather, seed, aeb, s):
             "seed": seed, "aeb": aeb, "collided": s.get("collided"), "impact_kmh": s.get("impact_speed_kmh"),
             "min_gap_m": s.get("min_gap_m"), "gap_start_m": s.get("gap_start_m"),
             "t_warn": s.get("t_first_warning_s"), "t_brake": s.get("t_first_brake_s"),
-            "final_speed_kmh": s.get("ego_final_speed_kmh"), "n_brake_ticks": s.get("n_brake_ticks"),
+            "final_speed_kmh": s.get("ego_final_speed_kmh"), "v_start_kmh": s.get("ego_speed_start_kmh"), "v_brake_kmh": s.get("ego_speed_at_first_brake_kmh"),
+            "n_brake_ticks": s.get("n_brake_ticks"),
             "max_state": s.get("max_state"), "error": s.get("error")}
 
 
@@ -61,6 +64,8 @@ def main():
     ap.add_argument("--lead-speed", type=float, default=30.0, help="km/h (braking, follow)")
     ap.add_argument("--town", default="Town10HD_Opt")
     ap.add_argument("--resume", default=None, help="id d'une campagne à reprendre")
+    ap.add_argument("--aeb-opts", default="", help="options AEB transmises à 11, ex. \"--a-partial 3 --a-emergency 4\"")
+    ap.add_argument("--skip-baseline", action="store_true", help="ne pas relancer les témoins sans AEB")
     args = ap.parse_args()
 
     cid = args.resume or time.strftime("%Y%m%d-%H%M%S")
@@ -74,7 +79,7 @@ def main():
     done = {r["case"] for r in rows}
 
     cases = [(v0, w, sd, aeb) for sd in args.seeds for v0 in args.speeds for w in args.weathers
-             for aeb in (False, True)]
+             for aeb in ((True,) if args.skip_baseline else (False, True))]
     print(f"campagne {cid} : {len(cases)} essais, {len(done)} déjà faits")
     for i, (v0, w, sd, aeb) in enumerate(cases, 1):
         case = f"v{int(v0)}_{w}_s{sd}_{'aeb' if aeb else 'noaeb'}"
@@ -111,13 +116,14 @@ def main():
             print(f"{v0:>6.0f} km/h{'AEB':>10}{len(rs):>8}{nb:>9}/{len(rs):<5}{nw:>20}/{len(rs)}")
         print(f"\nrésultats : {res_path}")
         return
-    print(f"\n{'vitesse':>8}{'mode':>10}{'essais':>8}{'collisions':>12}{'impact moy.':>13}{'écart min méd.':>16}")
+    print(f"\n{'vitesse':>8}{'mode':>10}{'essais':>8}{'collisions':>12}{'impact moy.':>13}{'écart min méd.':>16}{'v réelle départ':>17}")
     for (v0, aeb), rs in sorted(agg.items()):
         col = [str(r["collided"]) in ("True", "true") for r in rs]
         imp = [float(r["impact_kmh"]) for r, c in zip(rs, col) if c]
         gaps = sorted(float(r["min_gap_m"]) for r in rs)
         print(f"{v0:>6.0f} km/h{'AEB' if aeb else 'témoin':>10}{len(rs):>8}{sum(col):>6}/{len(rs):<5}"
-              f"{(sum(imp) / len(imp) if imp else 0):>11.1f}{gaps[len(gaps) // 2]:>16.1f}")
+              f"{(sum(imp) / len(imp) if imp else 0):>11.1f}{gaps[len(gaps) // 2]:>16.1f}"
+              f"{sum(float(r['v_start_kmh'] or 0) for r in rs) / len(rs):>17.1f}")
     n_err = sum(1 for r in rows if r.get("error") not in ("", None))
     print(f"\nrésultats : {res_path}" + (f"   ({n_err} essais en erreur)" if n_err else ""))
 

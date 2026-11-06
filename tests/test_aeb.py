@@ -80,3 +80,16 @@ def test_banc_pas_de_faux_freinage_suivi_stable():
         r = simulate(v0_kmh=50, lead_speed_kmh=50, gap0=15, fps=20, dropout=0.1, seed=seed,
                      t_max=10, dangerous=False)
         assert not r.false_brake
+
+
+def test_aeb_garde_le_frein_a_tres_basse_vitesse_pres_d_un_obstacle():
+    # régression : relâchement à ~1 m/s à 11 m d'un obstacle arrêté
+    from fusion.adas import PARTIAL_BRAKING
+    dt = 0.05
+    tr, aeb = Tracker(dt), AEB(dt=dt)
+    r, v, out = 40.0, 13.9, None
+    for _ in range(300):
+        out = aeb.step(tr.step([(r, 0.0)]), v)
+        v = max(1.0, v - (out.brake * 4.5) * dt)      # l'ego ralentit mais reste à ~1 m/s
+        r = max(r - v * dt, 5.0)
+    assert out.state >= PARTIAL_BRAKING and r < 15.0

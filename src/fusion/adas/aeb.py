@@ -4,8 +4,10 @@ Entrées : pistes confirmées du tracker, vitesse de l'ego. Sorties : état, con
 
   NORMAL -> WARNING (TTC < ttc_warn) -> PARTIAL_BRAKING (TTC < ttc_partial) -> EMERGENCY_BRAKING
 Escalade : le niveau doit être demandé sur `confirm_frames` images consécutives (anti-fausse alarme).
-Désescalade : après `release_hold_s` sans demande, et seulement si l'ego roule encore ou si plus aucun
-obstacle n'est à moins de `hold_range` m (on garde le frein à l'arrêt derrière un obstacle).
+Désescalade : après `release_hold_s` sans demande, et seulement si plus aucun obstacle du couloir n'est à
+moins de `hold_range` m sans s'éloigner (on garde le frein tant qu'un obstacle proche n'ouvre pas la distance,
+à l'arrêt comme à très basse vitesse : un essai a montré qu'un relâchement à 1 m/s, avec un conducteur qui
+ré-accélère, ramène l'ego à 0,5 m de l'obstacle).
 Critère principal : décélération requise pour s'arrêter avant l'obstacle, latence comprise,
   a_req = v_c^2 / (2 (x - v_c * t_latence - marge))     (infinie si la distance est déjà insuffisante)
 Un seuil de TTC fixe ne convient pas à toutes les vitesses (essai : il freine trop tard à 50 km/h
@@ -96,8 +98,8 @@ class AEB:
             self.state = min(self.hist)
             self.below_time = 0.0
         elif raw < self.state:
-            obstacle_close = any(t.range < c.hold_range for t in in_path)
-            if ego_speed > c.stopped_speed or not obstacle_close:
+            obstacle_close = any(t.range < c.hold_range and t.closing_speed > -c.min_closing for t in in_path)
+            if not obstacle_close:
                 self.below_time += self.dt
                 if self.below_time >= c.release_hold_s:
                     self.state = raw
