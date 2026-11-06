@@ -10,7 +10,9 @@ Scénarios
   approach : l'ego, avec un régulateur de distance (ralentit seul, décélération douce), s'approche d'un
              véhicule plus lent (--lead-speed) : conduite normale, l'AEB ne doit PAS freiner
 Chaque tick (20 Hz) : capteurs -> YOLO -> LiDAR -> tracker -> AEB -> commande de l'ego.
-Sorties : runs\aeb\<id>\ log.csv (une ligne par tick), summary.json, frames\ (images annotées à ~5 Hz).
+Sorties : runs\aeb\<id>\ log.csv (une ligne par tick), summary.json, frames\ (images annotées à ~5 Hz),
+status.json (starting | running | finished | stopped | error), latest.jpg et latest.json (dernier état, ~5 Hz,
+lus par l'interface web). Arrêt propre : créer un fichier STOP dans le dossier du run.
 
 Usage (serveur CARLA lancé, venv actif) :
   python scripts\11_aeb_closed_loop.py --scenario stopped --v0 50 --gap 80
@@ -40,6 +42,12 @@ from fusion.perception import fuse_box, project_lidar
 from fusion.adas import AEB, AEBConfig, Tracker
 
 STATE_COLOR = {0: (0, 200, 0), 1: (0, 200, 255), 2: (0, 140, 255), 3: (0, 0, 255)}
+
+
+def write_json(path, obj):
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj))
+    tmp.replace(path)
 
 
 def wrap(a):
@@ -136,6 +144,7 @@ def main():
     ap.add_argument("--imgsz", type=int, default=800)
     ap.add_argument("--t-max", type=float, default=25.0)
     ap.add_argument("--out", default=str(ROOT / "runs" / "aeb"))
+    ap.add_argument("--run-id", default=None, help="nom du dossier du run (défaut : horodatage_scénario_vitesse)")
     args = ap.parse_args()
 
     import torch
@@ -143,9 +152,12 @@ def main():
     model = YOLO(args.weights)
     device = 0 if torch.cuda.is_available() else "cpu"
 
-    run_id = time.strftime("%Y%m%d-%H%M%S") + f"_{args.scenario}_{int(args.v0)}" + ("_noaeb" if args.no_aeb else "")
+    run_id = args.run_id or (time.strftime("%Y%m%d-%H%M%S") + f"_{args.scenario}_{int(args.v0)}"
+                             + ("_noaeb" if args.no_aeb else ""))
     run_dir = Path(args.out) / run_id
     (run_dir / "frames").mkdir(parents=True, exist_ok=True)
+    status = {"state": "starting", "scenario": args.scenario, "t": 0.0, "error": None}
+    write_json(run_dir / "status.json", status)
 
     client = carla.Client(CFG.host, CFG.port)
     client.set_timeout(30.0)
@@ -243,6 +255,9 @@ def main():
             d = lt.location - et.location
             return d.x * f.x + d.y * f.y + d.z * f.z - ext_e - ext_l
 
+        status["state"] = "running"
+        write_json(run_dir / "status.json", status)
+        user_stop = False
         log, infer_ms = [], []
         t_warn = t_brake = None
         collided, impact = False, 0.0
@@ -255,6 +270,9 @@ def main():
         out = None
         for i in range(1, n_ticks + 1):
             t = i * CFG.dt
+            if (run_dir / "STOP").exists():
+                user_stop = True
+                break
             frame = world.tick()
             rgb_d, lid_d = fetch(q["rgb"], frame), fetch(q["lidar"], frame)
             img = np.ascontiguousarray(
@@ -310,6 +328,14 @@ def main():
                 cv2.putText(ann, f"{out.state_name}  ego {ev * 3.6:.0f} km/h  gap {g:.1f} m", (10, 24),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, STATE_COLOR[out.state], 2)
                 cv2.imwrite(str(run_dir / "frames" / f"{i:05d}.jpg"), ann)
+                cv2.imwrite(str(run_dir / "latest.tmp.jpg"), ann)
+                (run_dir / "latest.tmp.jpg").replace(run_dir / "latest.jpg")
+                write_json(run_dir / "latest.json", {
+                    "t": round(t, 2), "ego_kmh": round(ev * 3.6, 1), "lead_kmh": round(vlv * 3.6, 1),
+                    "gap_true": round(g, 2), "meas_range": log[-1]["meas_range"], "state": out.state_name,
+                    "a_req": log[-1]["a_req"], "brake": out.brake, "n_det": len(dets), "n_tracks": len(tracks)})
+                status["t"] = round(t, 2)
+                write_json(run_dir / "status.json", status)
 
             if lead.id in col_events:
                 collided, impact = True, max(last_ev - last_vl, 0.0)
@@ -324,7 +350,9 @@ def main():
             elif args.scenario not in ("follow", "approach") and g < -1.0:
                 collided, impact = True, max(ev - vlv, 0.0)
                 break
+        status["state"] = "stopped" if user_stop else "finished"
         summary.update({
+            "stopped_by_user": user_stop,
             "collided": collided, "impact_speed_kmh": round(impact * 3.6, 1), "min_gap_m": round(min_gap, 2),
             "gap_start_m": round(gap_start, 2), "t_first_warning_s": t_warn, "t_first_brake_s": t_brake,
             "ego_final_speed_kmh": round(log[-1]["ego_v"] * 3.6, 1) if log else None,
@@ -343,6 +371,7 @@ def main():
             wr.writerows(log)
     except Exception as e:                                   # noqa: BLE001
         summary["error"] = f"{type(e).__name__}: {e}"
+        status["state"], status["error"] = "error", summary["error"]
         print(summary["error"], file=sys.stderr)
     finally:
         for s_ in sensors:
@@ -357,6 +386,7 @@ def main():
         except Exception as e:                               # noqa: BLE001
             print(f"nettoyage incomplet : {e}", file=sys.stderr)
         (run_dir / "summary.json").write_text(json.dumps(summary, indent=1))
+        write_json(run_dir / "status.json", status)
         print(json.dumps(summary, indent=1))
 
 

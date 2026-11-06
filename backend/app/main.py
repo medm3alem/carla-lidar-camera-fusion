@@ -22,6 +22,8 @@ from pydantic import BaseModel, Field
 ROOT = Path(__file__).resolve().parents[2]
 RUNS = ROOT / "runs" / "studio"
 WORKER = ROOT / "backend" / "worker.py"
+AEB_SCRIPT = ROOT / "scripts" / "11_aeb_closed_loop.py"
+SCENARIOS = ["stopped", "braking", "adjacent", "follow", "approach"]
 STATIC = ROOT / "backend" / "static"
 TOWNS = ["Town01", "Town02", "Town03", "Town04", "Town05", "Town10HD_Opt"]
 WEATHERS = ["clear", "rain", "fog"]
@@ -39,6 +41,14 @@ class RunConfig(BaseModel):
     seed: int = 42
     model: str = "finetuned"            # finetuned | coco
     conf: float = Field(0.25, ge=0.01, le=0.99)
+    # kind="aeb" : scénario scripté en boucle fermée (scripts/11_aeb_closed_loop.py, 20 Hz, sans trafic)
+    kind: str = "observe"               # observe | aeb
+    scenario: str = "stopped"
+    v0: float = Field(50.0, ge=10, le=90)
+    gap: float = Field(60.0, ge=10, le=80)
+    lead_speed: float = Field(50.0, ge=5, le=90)
+    lead_brake_t: float = Field(3.0, ge=0, le=20)
+    aeb: bool = True
 
 
 def active_run():
@@ -64,7 +74,8 @@ def run_dir(run_id: str) -> Path:
 
 def run_status(run_id: str) -> dict:
     d = run_dir(run_id)
-    st = read_json(d / "status.json") or {"state": "starting", "n_frames": 0, "error": None}
+    st = read_json(d / "status.json") or {"state": "starting", "error": None}
+    st.setdefault("n_frames", 0)
     p = procs.get(run_id)
     if p is not None and p.poll() is not None and st["state"] in ("starting", "running"):
         st = {**st, "state": "error", "error": f"worker arrêté (code {p.returncode}), voir worker.log"}
@@ -84,12 +95,13 @@ def carla_status():
 
 @app.get("/api/options")
 def options():
-    return {"towns": TOWNS, "weathers": WEATHERS, "models": ["finetuned", "coco"]}
+    return {"towns": TOWNS, "weathers": WEATHERS, "models": ["finetuned", "coco"], "scenarios": SCENARIOS}
 
 
 @app.post("/api/runs")
 def start_run(cfg: RunConfig):
-    if cfg.town not in TOWNS or cfg.weather not in WEATHERS or cfg.model not in ("finetuned", "coco"):
+    if (cfg.town not in TOWNS or cfg.weather not in WEATHERS or cfg.model not in ("finetuned", "coco")
+            or cfg.kind not in ("observe", "aeb") or cfg.scenario not in SCENARIOS):
         raise HTTPException(422, "paramètre invalide")
     busy = active_run()
     if busy:
@@ -99,11 +111,22 @@ def start_run(cfg: RunConfig):
     run_id = time.strftime("%Y%m%d-%H%M%S")
     d = RUNS / run_id
     d.mkdir(parents=True, exist_ok=True)
-    cmd = [sys.executable, str(WORKER), "--run-id", run_id, "--town", cfg.town,
-           "--weather", cfg.weather, "--n-npc", str(cfg.n_npc), "--seconds", str(cfg.seconds),
-           "--seed", str(cfg.seed), "--conf", str(cfg.conf)]
-    if cfg.model == "coco":
-        cmd += ["--coco", "--weights", str(ROOT / "weights" / "yolo26n.pt")]
+    if cfg.kind == "aeb":
+        cmd = [sys.executable, str(AEB_SCRIPT), "--run-id", run_id, "--out", str(RUNS),
+               "--scenario", cfg.scenario, "--v0", str(cfg.v0), "--gap", str(cfg.gap),
+               "--lead-speed", str(cfg.lead_speed), "--lead-brake-t", str(cfg.lead_brake_t),
+               "--town", cfg.town, "--weather", cfg.weather, "--seed", str(cfg.seed), "--conf", str(cfg.conf)]
+        if not cfg.aeb:
+            cmd.append("--no-aeb")
+    else:
+        cmd = [sys.executable, str(WORKER), "--run-id", run_id, "--town", cfg.town,
+               "--weather", cfg.weather, "--n-npc", str(cfg.n_npc), "--seconds", str(cfg.seconds),
+               "--seed", str(cfg.seed), "--conf", str(cfg.conf)]
+        if cfg.model == "coco":
+            cmd += ["--coco", "--weights", str(ROOT / "weights" / "yolo26n.pt")]
+        (d / "config.json").write_text(json.dumps({**(cfg.model_dump() if hasattr(cfg, "model_dump") else cfg.dict()), "run_id": run_id}))
+    if cfg.kind == "aeb":
+        (d / "config.json").write_text(json.dumps({**(cfg.model_dump() if hasattr(cfg, "model_dump") else cfg.dict()), "run_id": run_id}))
     log = open(d / "worker.log", "w")
     procs[run_id] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(ROOT))
     return {"run_id": run_id}
@@ -124,9 +147,12 @@ def list_runs():
             if d.is_dir():
                 st = run_status(d.name)
                 s = read_json(d / "summary.json") or {}
+                cfg_ = read_json(d / "config.json") or {}
                 out.append({"run_id": d.name, "state": st["state"], "n_frames": st["n_frames"],
+                            "kind": cfg_.get("kind", "observe"),
                             "n_detections": s.get("n_detections"), "n_with_lidar": s.get("n_with_lidar"),
-                            "config": (read_json(d / "config.json") or {})})
+                            "collided": s.get("collided"), "min_gap_m": s.get("min_gap_m"),
+                            "max_state": s.get("max_state"), "config": cfg_})
     return out
 
 
@@ -135,6 +161,22 @@ def get_run(run_id: str):
     d = run_dir(run_id)
     return {"run_id": run_id, "status": run_status(run_id),
             "summary": read_json(d / "summary.json"), "config": read_json(d / "config.json")}
+
+
+@app.get("/api/runs/{run_id}/log")
+def aeb_log(run_id: str):
+    """log.csv d'un run AEB (une ligne par tick, 20 Hz) sous forme de colonnes."""
+    import csv
+    p = run_dir(run_id) / "log.csv"
+    if not p.exists():
+        raise HTTPException(404, "pas de log (run non terminé ou run d'observation)")
+    with open(p, newline="") as f:
+        rows = list(csv.DictReader(f))
+    cols = {}
+    for k in ("t", "ego_v", "lead_v", "gap_true", "a_req", "brake"):
+        cols[k] = [float(r[k]) if r[k] not in ("", "inf") else None for r in rows]
+    cols["state"] = [r["state"] for r in rows]
+    return cols
 
 
 @app.get("/api/runs/{run_id}/latest.jpg")
@@ -179,7 +221,8 @@ async def stream(ws: WebSocket, run_id: str):
                 if rec is not None:
                     msg = {"status": st, "frame": rec, "image": img}
             if msg is None and st["state"] not in ("starting", "running"):
-                await ws.send_json({"status": st, "frame": None, "image": None, "final": True})
+                await ws.send_json({"status": st, "frame": None, "image": None, "final": True,
+                                    "summary": read_json(d / "summary.json")})
                 break
             if msg is not None:
                 await ws.send_json(msg)

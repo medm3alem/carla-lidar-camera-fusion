@@ -2,8 +2,8 @@
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ADAS Validation Studio</title>
 <style>
-:root{--bg:#f6f7f9;--fg:#1c2330;--card:#fff;--line:#d9dde3;--acc:#1f6feb;--ok:#1a7f37;--bad:#b42318}
-@media (prefers-color-scheme:dark){:root{--bg:#12161c;--fg:#e6e9ee;--card:#1b212a;--line:#2d3642;--acc:#58a6ff;--ok:#3fb950;--bad:#f85149}}
+:root{--bg:#f6f7f9;--fg:#1c2330;--card:#fff;--line:#d9dde3;--acc:#1f6feb;--ok:#1a7f37;--bad:#b42318;--s0:#1a7f37;--s1:#d4a000;--s2:#e8710a;--s3:#b42318}
+@media (prefers-color-scheme:dark){:root{--bg:#12161c;--fg:#e6e9ee;--card:#1b212a;--line:#2d3642;--acc:#58a6ff;--ok:#3fb950;--bad:#f85149;--s0:#3fb950;--s1:#e3b341;--s2:#f0883e;--s3:#f85149}}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,sans-serif}
 main{max-width:1100px;margin:0 auto;padding:16px;display:grid;gap:16px;grid-template-columns:300px 1fr}
 @media(max-width:800px){main{grid-template-columns:1fr}}
@@ -11,56 +11,122 @@ main{max-width:1100px;margin:0 auto;padding:16px;display:grid;gap:16px;grid-temp
 h1{font-size:18px;margin:0 0 4px}h2{font-size:14px;margin:0 0 10px}
 label{display:block;margin:8px 0 2px;font-size:12px;opacity:.8}
 select,input{width:100%;box-sizing:border-box;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
+input[type=checkbox]{width:auto;margin-right:6px}
 button{padding:8px 12px;border:0;border-radius:6px;background:var(--acc);color:#fff;cursor:pointer;margin-top:12px}
 button.stop{background:var(--bad)}button:disabled{opacity:.4;cursor:default}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:var(--bad)}.dot.on{background:var(--ok)}
-img#view{width:100%;border-radius:6px;background:#000;min-height:200px}
+img#view:not([src]){display:none}img#view{width:100%;border-radius:6px;background:#000;min-height:200px}
 table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
 .muted{opacity:.7}.err{color:var(--bad)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-top:10px}
+.kpi{border:1px solid var(--line);border-radius:6px;padding:6px 8px}.kpi b{display:block;font-size:18px;font-variant-numeric:tabular-nums}.kpi span{font-size:11px;opacity:.7}
+#plot{width:100%;height:260px;margin-top:10px;display:block}
+.hide{display:none}
 </style></head><body>
 <main>
 <section class="card" style="grid-column:1/-1"><h1>ADAS Validation Studio</h1>
-<div class="muted">MVP : caméra RGB, détections YOLO et distances LiDAR. <span id="carla"><span class="dot"></span>CARLA…</span></div></section>
+<div class="muted">Scénarios AEB en boucle fermée (20 Hz, perception YOLO + LiDAR réelle) et observation de trafic. <span id="carla"><span class="dot"></span>CARLA…</span></div></section>
 
 <section class="card"><h2>Configuration</h2>
+<label>Type de run</label><select id="kind"><option value="aeb">Scénario AEB (boucle fermée)</option><option value="observe">Observation (trafic, détections)</option></select>
 <label>Carte</label><select id="town"></select>
 <label>Météo</label><select id="weather"></select>
+<label>Graine</label><input id="seed" type="number" value="42">
+<label>Seuil de confiance</label><input id="conf" type="number" value="0.25" step="0.05" min="0.05" max="0.95">
+<div id="g_aeb">
+<label>Scénario</label><select id="scenario"></select>
+<label>Vitesse de l'ego (km/h)</label><input id="v0" type="number" value="50" min="10" max="90">
+<label>Écart initial (m)</label><input id="gap" type="number" value="60" min="10" max="80">
+<label>Vitesse de la cible (km/h, braking / follow / approach)</label><input id="lead_speed" type="number" value="50" min="5" max="90">
+<label>Instant du freinage de la cible (s, braking)</label><input id="lead_brake_t" type="number" value="3" min="0" max="20" step="0.5">
+<label><input id="aeb" type="checkbox" checked>AEB activé (décocher = témoin)</label>
+</div>
+<div id="g_obs" class="hide">
 <label>Véhicules de trafic</label><input id="n_npc" type="number" value="70" min="0" max="150">
 <label>Durée (s)</label><input id="seconds" type="number" value="30" min="5" max="300">
-<label>Graine</label><input id="seed" type="number" value="42">
 <label>Modèle</label><select id="model"><option value="finetuned">fine-tuné (v4_n)</option><option value="coco">COCO préentraîné</option></select>
-<label>Seuil de confiance</label><input id="conf" type="number" value="0.25" step="0.05" min="0.05" max="0.95">
+</div>
 <button id="start">Démarrer</button> <button id="stop" class="stop" disabled>Arrêter</button>
-<div id="msg" class="muted" style="margin-top:8px"></div></section>
+<div id="msg" class="muted" style="margin-top:8px"></div>
+<div class="muted" style="margin-top:8px;font-size:12px">Les scénarios AEB exigent un tronçon droit : si la carte n'en a pas d'assez long, l'erreur indique l'écart maximal possible.</div></section>
 
 <section class="card"><h2>Vue <span id="state" class="muted"></span></h2>
 <img id="view" alt="Flux caméra annotée">
+<div id="live" class="kpis hide">
+ <div class="kpi"><span>État AEB</span><b id="k_state">-</b></div>
+ <div class="kpi"><span>Ego (km/h)</span><b id="k_ego">-</b></div>
+ <div class="kpi"><span>Cible (km/h)</span><b id="k_lead">-</b></div>
+ <div class="kpi"><span>Écart réel (m)</span><b id="k_gap">-</b></div>
+ <div class="kpi"><span>Décél. requise (m/s²)</span><b id="k_areq">-</b></div>
+ <div class="kpi"><span>Frein</span><b id="k_brake">-</b></div>
+</div>
+<div id="result" class="hide" style="margin-top:10px"></div>
+<canvas id="plot" class="hide"></canvas>
 <table id="dets" style="margin-top:10px"><thead><tr><th>#</th><th>Confiance</th><th>Distance LiDAR</th><th>Points</th><th>Estimation caméra</th></tr></thead><tbody></tbody></table></section>
 
-<section class="card" style="grid-column:1/-1"><h2>Runs enregistrés</h2>
-<table id="runs"><thead><tr><th>Run</th><th>État</th><th>Images</th><th>Détections</th><th>Avec LiDAR</th><th>Config</th></tr></thead><tbody></tbody></table>
-<div class="muted" style="margin-top:6px">Données dans <code>runs\studio\&lt;run&gt;\</code> (frames.jsonl, summary.json, images annotées).</div></section>
+<section class="card" style="grid-column:1/-1"><h2>Runs enregistrés <span class="muted">(cliquer sur un run AEB pour afficher ses courbes)</span></h2>
+<table id="runs"><thead><tr><th>Run</th><th>Type</th><th>État</th><th>Résultat</th><th>Config</th></tr></thead><tbody></tbody></table>
+<div class="muted" style="margin-top:6px">Données dans <code>runs\studio\&lt;run&gt;\</code> (summary.json, log.csv pour l'AEB, images annotées).</div></section>
 </main>
 <script>
-const $=id=>document.getElementById(id);let cur=null,ws=null;
+const $=id=>document.getElementById(id);let cur=null,ws=null,curKind='aeb';
+const SC={NORMAL:0,WARNING:1,PARTIAL_BRAKING:2,EMERGENCY_BRAKING:3};
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 async function api(p,o){const r=await fetch(p,o);if(!r.ok){let d=await r.text();try{d=JSON.parse(d).detail}catch{}throw new Error(d)}return r.json()}
 async function carla(){try{const c=await api('/api/carla');$('carla').innerHTML=`<span class="dot ${c.reachable?'on':''}"></span>CARLA ${c.reachable?'connecté':'injoignable'} (${c.host}:${c.port})`}catch{}}
+function kindUI(){const a=$('kind').value==='aeb';$('g_aeb').classList.toggle('hide',!a);$('g_obs').classList.toggle('hide',a)}
 async function init(){const o=await api('/api/options');
  $('town').innerHTML=o.towns.map(t=>`<option>${t}</option>`).join('');$('town').value='Town10HD_Opt';
  $('weather').innerHTML=o.weathers.map(t=>`<option>${t}</option>`).join('');
- carla();setInterval(carla,5000);runs();setInterval(runs,4000)}
+ $('scenario').innerHTML=o.scenarios.map(t=>`<option>${t}</option>`).join('');
+ $('kind').onchange=kindUI;kindUI();carla();setInterval(carla,5000);runs();setInterval(runs,4000)}
+function resText(x){if(x.kind!=='aeb')return x.n_detections==null?'-':`${x.n_frames} images, ${x.n_detections} détections (${x.n_with_lidar} avec LiDAR)`;
+ if(x.collided==null)return '-';return (x.collided?'<span class="err">collision</span>':'sans collision')+`, écart min ${x.min_gap_m} m, état max ${x.max_state}`}
 async function runs(){const r=await api('/api/runs');
- $('runs').querySelector('tbody').innerHTML=r.map(x=>`<tr><td>${x.run_id}</td><td>${x.state}</td><td>${x.n_frames}</td><td>${x.n_detections??'-'}</td><td>${x.n_with_lidar??'-'}</td><td class="muted">${x.config.town||''} ${x.config.weather||''}</td></tr>`).join('')}
-function show(m){const st=m.status;$('state').textContent=`— ${st.state}, ${st.n_frames} images`+(st.error?` — ${st.error}`:'');
- if(st.error)$('state').className='err';else $('state').className='muted';
+ $('runs').querySelector('tbody').innerHTML=r.map(x=>`<tr ${x.kind==='aeb'?`style="cursor:pointer" data-id="${x.run_id}"`:''}><td>${x.run_id}</td><td>${x.kind==='aeb'?'AEB '+(x.config.scenario||''):'observation'}</td><td>${x.state}</td><td>${resText(x)}</td><td class="muted">${x.config.town||''} ${x.config.weather||''}${x.kind==='aeb'?` ${x.config.v0} km/h, écart ${x.config.gap} m${x.config.aeb===false?', témoin':''}`:''}</td></tr>`).join('');
+ document.querySelectorAll('#runs tr[data-id]').forEach(tr=>tr.onclick=()=>openRun(tr.dataset.id))}
+function setMode(k){curKind=k;const a=k==='aeb';$('live').classList.toggle('hide',!a);$('dets').classList.toggle('hide',a);
+ if(!a){$('plot').classList.add('hide');$('result').classList.add('hide')}}
+async function openRun(id){setMode('aeb');$('view').removeAttribute('src');
+ try{const [g,l]=await Promise.all([api('/api/runs/'+id),api('/api/runs/'+id+'/log')]);
+  $('state').textContent='— '+id;summary(g.summary);plot(l)}catch(e){$('state').innerHTML=`<span class="err">${e.message}</span>`}}
+function summary(s){const r=$('result');if(!s){r.classList.add('hide');return}r.classList.remove('hide');
+ if(s.error){r.innerHTML=`<span class="err">${s.error}</span>`;return}
+ r.innerHTML=`<b>${s.collided?`<span class="err">Collision à ${s.impact_speed_kmh} km/h</span>`:'Sans collision'}</b> — écart minimal ${s.min_gap_m} m, `+
+ `première alerte ${s.t_first_warning_s==null?'-':s.t_first_warning_s.toFixed(2)+' s'}, premier freinage ${s.t_first_brake_s==null?'-':s.t_first_brake_s.toFixed(2)+' s'}, `+
+ `état max ${s.max_state}, vitesse finale ${s.ego_final_speed_kmh} km/h`+(s.aeb_enabled?'':' <span class="muted">(témoin sans AEB)</span>')}
+function plot(l){const c=$('plot');c.classList.remove('hide');const dpr=devicePixelRatio||1,W=c.clientWidth,H=c.clientHeight;c.width=W*dpr;c.height=H*dpr;
+ const x=c.getContext('2d');x.scale(dpr,dpr);x.clearRect(0,0,W,H);x.font='11px system-ui';
+ const fg=css('--fg'),line=css('--line'),t=l.t,T=t[t.length-1]||1,L=40,R=W-8;
+ const X=v=>L+(R-L)*v/T;
+ // bande d'état
+ x.globalAlpha=.9;for(let i=0;i<t.length;i++){x.fillStyle=css('--s'+SC[l.state[i]]);x.fillRect(X(t[i]),4,Math.max(1,X(t[1]||0.05)-X(0)),8)}x.globalAlpha=1;
+ x.fillStyle=fg;x.fillText('état AEB',L,24);
+ function panel(y0,y1,series,label,unit){const all=series.flatMap(s=>s.v.filter(v=>v!=null));const mx=Math.max(1,...all)*1.05;const Y=v=>y1-(y1-y0)*v/mx;
+  x.strokeStyle=line;x.fillStyle=fg;x.lineWidth=1;x.beginPath();x.moveTo(L,y0);x.lineTo(L,y1);x.lineTo(R,y1);x.stroke();
+  [0,.5,1].forEach(f=>{x.fillText((mx*f).toFixed(0),4,Y(mx*f)+3)});x.fillText(label+' ('+unit+')',L+4,y0+10);
+  series.forEach(s=>{x.strokeStyle=s.c;x.lineWidth=1.6;x.beginPath();let st=false;s.v.forEach((v,i)=>{if(v==null){st=false;return}st?x.lineTo(X(t[i]),Y(v)):x.moveTo(X(t[i]),Y(v));st=true});x.stroke();
+   x.fillStyle=s.c;x.fillText(s.n,R-70,y0+10+12*series.indexOf(s))})}
+ panel(36,(H-24)/2+18,[{n:'ego',c:css('--acc'),v:l.ego_v.map(v=>v*3.6)},{n:'cible',c:css('--s1'),v:l.lead_v.map(v=>v*3.6)}],'vitesse','km/h');
+ panel((H-24)/2+30,H-18,[{n:'écart réel',c:css('--ok'),v:l.gap_true}],'écart','m');
+ x.fillStyle=fg;x.fillText('0',L,H-5);x.fillText(T.toFixed(1)+' s',R-30,H-5)}
+function show(m){const st=m.status;$('state').textContent=`— ${st.state}`+(curKind==='observe'?`, ${st.n_frames} images`:'')+(st.error?` — ${st.error}`:'');
+ $('state').className=st.error?'err':'muted';
  if(m.image)$('view').src='data:image/jpeg;base64,'+m.image;
- if(m.frame)$('dets').querySelector('tbody').innerHTML=m.frame.detections.map((d,i)=>`<tr><td>${i+1}</td><td>${d.conf.toFixed(2)}</td><td>${d.lidar_depth==null?'-':d.lidar_depth.toFixed(1)+' m'}</td><td>${d.n_cluster}</td><td>${d.mono_depth.toFixed(1)} m</td></tr>`).join('');
- if(m.final){$('start').disabled=false;$('stop').disabled=true;runs()}}
-$('start').onclick=async()=>{$('msg').textContent='';
- const body={town:$('town').value,weather:$('weather').value,n_npc:+$('n_npc').value,seconds:+$('seconds').value,seed:+$('seed').value,model:$('model').value,conf:+$('conf').value};
+ if(m.frame&&curKind==='aeb'){const f=m.frame;$('k_state').textContent=f.state.replace('_BRAKING','');$('k_state').style.color=css('--s'+SC[f.state]);
+  $('k_ego').textContent=f.ego_kmh.toFixed(0);$('k_lead').textContent=f.lead_kmh.toFixed(0);$('k_gap').textContent=f.gap_true.toFixed(1);
+  $('k_areq').textContent=f.a_req==='inf'?'∞':(+f.a_req).toFixed(1);$('k_brake').textContent=(f.brake*100).toFixed(0)+' %'}
+ if(m.frame&&curKind==='observe')$('dets').querySelector('tbody').innerHTML=m.frame.detections.map((d,i)=>`<tr><td>${i+1}</td><td>${d.conf.toFixed(2)}</td><td>${d.lidar_depth==null?'-':d.lidar_depth.toFixed(1)+' m'}</td><td>${d.n_cluster}</td><td>${d.mono_depth.toFixed(1)} m</td></tr>`).join('');
+ if(m.final){$('start').disabled=false;$('stop').disabled=true;runs();
+  if(curKind==='aeb'){summary(m.summary);api('/api/runs/'+cur+'/log').then(plot).catch(()=>{})}}}
+$('start').onclick=async()=>{$('msg').textContent='';const k=$('kind').value;
+ const body={kind:k,town:$('town').value,weather:$('weather').value,seed:+$('seed').value,conf:+$('conf').value,
+  n_npc:+$('n_npc').value,seconds:+$('seconds').value,model:$('model').value,
+  scenario:$('scenario').value,v0:+$('v0').value,gap:+$('gap').value,lead_speed:+$('lead_speed').value,lead_brake_t:+$('lead_brake_t').value,aeb:$('aeb').checked};
  try{const r=await api('/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  setMode(k);$('result').classList.add('hide');$('plot').classList.add('hide');
   cur=r.run_id;$('start').disabled=true;$('stop').disabled=false;$('state').textContent='— démarrage (chargement de la carte et du modèle)…';
-  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/runs/'+cur);ws.onmessage=e=>show(JSON.parse(e.data));
+  if(ws)ws.close();ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/runs/'+cur);ws.onmessage=e=>show(JSON.parse(e.data));
  }catch(e){$('msg').innerHTML=`<span class="err">${e.message}</span>`}};
 $('stop').onclick=()=>cur&&api(`/api/runs/${cur}/stop`,{method:'POST'});
 init();
