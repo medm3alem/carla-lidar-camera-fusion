@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from fusion.config import CFG
 from fusion import geometry as geo
-from fusion.perception import (box_iou, boxes_of, fuse_box, mono_depth, project_lidar,
+from fusion.perception import (box_iou, boxes_of, fuse_box, ground_depth, mono_depth, project_lidar,
                                GROUND_MARGIN, INNER, MONO_HEIGHT)
 
 BINS = [(0, 20), (20, 40), (40, 60)]
@@ -107,6 +107,7 @@ def main():
                 "gt_dist": gts[gt]["distance"] if gt is not None else None,
                 "gt_face": gts[gt]["depth_face"] if gt is not None else None,
                 "lidar_depth": d_lidar, "n_cluster": n_clu, "mono_depth": mono,
+                "ground_depth": ground_depth(K, box, CFG.cam_pos[2]),
             })
 
     tps = [x for x in rows if x["status"] == "tp"]
@@ -117,7 +118,7 @@ def main():
         return f"{np.median(err):+6.2f} {e.mean():6.2f} {100 * (e < 1).mean():5.0f} %"
 
     print(f"\n=== A. Profondeur des détections justes ({len(tps)}), référence : face avant ===")
-    print(f"{'distance':<10}{'n':>6}{'couverture':>12}   {'LiDAR : méd. MAE <1 m':<28}  caméra seule : méd. MAE <1 m")
+    print(f"{'distance':<10}{'n':>6}{'couverture':>12}   {'LiDAR : méd. MAE <1 m':<28}  {'hauteur fixe 1,5 m':<28}  plan du sol")
     for lo, hi in BINS + [(0, 60)]:
         sel = [x for x in tps if lo <= x["gt_dist"] < hi]
         wl = [x for x in sel if x["lidar_depth"] is not None]
@@ -125,7 +126,9 @@ def main():
             continue
         lid = line([x["lidar_depth"] - x["gt_face"] for x in wl]) if wl else "-"
         mono = line([x["mono_depth"] - x["gt_face"] for x in sel])
-        print(f"{f'{lo}-{hi} m':<10}{len(sel):>6}{100 * len(wl) / len(sel):>10.0f} %   {lid:<28}  {mono}")
+        gl = [x for x in sel if x["ground_depth"] is not None]
+        grd = line([x["ground_depth"] - x["gt_face"] for x in gl]) if gl else "-"
+        print(f"{f'{lo}-{hi} m':<10}{len(sel):>6}{100 * len(wl) / len(sel):>10.0f} %   {lid:<28}  {mono:<28}  {grd}")
 
     print(f"\n=== B. Rejet de détections sans preuve LiDAR (vraies : {len(tps)}, fausses : {len(fps)}) ===")
     print(f"{'seuil':>6}{'vraies gardées':>16}{'fausses gardées':>17}{'précision':>11}{'recall':>9}{'FP/frame':>10}")

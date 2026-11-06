@@ -6,7 +6,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from fusion import geometry as geo
-from fusion.perception import box_iou, front_cluster, fuse_box, mono_depth, project_lidar
+from fusion.perception import box_iou, front_cluster, fuse_box, ground_depth, mono_depth, project_lidar
 
 
 def test_iou_identique_et_disjoint():
@@ -47,3 +47,11 @@ def test_sol_retire():
 def test_mono_depth():
     K = geo.intrinsics(800, 600, 90.0)
     assert abs(mono_depth(K, [0, 0, 10, 30]) - 400 * 1.5 / 30) < 1e-9
+
+
+def test_ground_depth_geometrie():
+    # caméra à 2,4 m, f = 400 px : un point de la route à 20 m se projette à v = cy + f*h/z = 300 + 48 px
+    K = geo.intrinsics(800, 600, 90.0)
+    box = [380, 250, 420, 348]
+    assert abs(ground_depth(K, box, 2.4) - 20.0) < 1e-6
+    assert ground_depth(K, [0, 0, 10, 299], 2.4) is None          # bord bas au-dessus de l'horizon : pas de sol

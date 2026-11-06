@@ -24,6 +24,33 @@ puis suivi (Kalman) et freinage d'urgence automatique (AEB) validé en boucle fe
 `perception/` (fusion caméra-LiDAR), `adas/` (tracker de Kalman, AEB, banc cinématique).
 `backend/` : prototype d'API FastAPI + page web pour lancer et suivre un run (en cours, voir plus bas).
 
+## Perception : profondeur et rejet de fausses alarmes (CARLA, jeu de test, 3 météos)
+YOLO fine-tuné (1 classe), distance LiDAR du premier groupe de points dans la boîte (sol retiré), comparée à deux
+estimations caméra seule. Référence : face avant du véhicule (étiquette CARLA). Erreur = estimé - référence (m) ;
+`scripts/09_fusion_depth.py`, détails dans `reference/fusion_*_test.csv`. Town10HD_Opt : 4 256 détections justes ;
+Town03 : 3 172. Le détecteur est entraîné sur `data\v4` (Town10) ; `data\v4_town03` est un jeu séparé (ville non vue
+à l'entraînement d'après l'organisation des dossiers, à confirmer avant de le revendiquer).
+
+| Ville, distance | LiDAR : MAE (<1 m) | Plan du sol : MAE (<1 m) | Hauteur fixe 1,5 m : MAE (<1 m) |
+|---|---|---|---|
+| Town10, 0-20 m | 0,83 (74 %) | 1,01 (73 %) | 0,90 (69 %) |
+| Town10, 20-40 m | 1,20 (75 %) | 0,99 (57 %) | 3,36 (31 %) |
+| Town10, 40-60 m | 1,67 (78 %) | 1,29 (50 %) | 6,27 (13 %) |
+| Town03, 0-20 m | 0,71 (77 %) | 0,98 (73 %) | 0,77 (73 %) |
+| Town03, 20-40 m | 1,10 (81 %) | 2,32 (59 %) | 3,46 (21 %) |
+| Town03, 40-60 m | 0,68 (93 %) | 7,10 (33 %) | 5,43 (12 %) |
+
+Lecture honnête : le LiDAR n'est pas plus précis en moyenne partout. À Town10, le plan du sol a une MAE plus faible
+à 20-60 m (1,0 / 1,3 m contre 1,2 / 1,7 m) mais seulement 50-57 % des détections à moins de 1 m, contre 75-78 % ;
+à Town03 il se dégrade nettement (MAE 7,1 m à 40-60 m, cause non vérifiée, probablement la pente de la route, qui viole
+l'hypothèse de route plane). Le LiDAR reste stable d'une ville à l'autre (MAE 0,7 à 1,7 m, couverture 99-100 %, biais
+médian +0,2 à +0,6 m, corrigé du pare-chocs dans l'AEB). La hauteur fixe est mauvaise au-delà de 20 m.
+
+Rejet des détections sans preuve LiDAR (au moins N points) : à N = 3, précision 92,1 -> 92,6 % (Town10) et
+86,9 -> 90,2 % (Town03) pour un recall quasi inchangé (95,6 -> 95,5 % et 93,5 -> 92,9 %) ; à N = 10, 94,6 / 94,0 %
+mais recall 86,1 / 79,1 %. L'effet est modeste : le rejet retire 7 % (Town10) et 28 % (Town03) des fausses alarmes à N = 3.
+Ces fausses alarmes sont celles du détecteur sur des images CARLA ; ce n'est pas une mesure sur du trafic réel.
+
 ## AEB : méthode
 - **Perception** : boîtes YOLO, points LiDAR (sol retiré) projetés dans la boîte, premier groupe de profondeur ;
   pas de profondeur LiDAR = pas de piste.

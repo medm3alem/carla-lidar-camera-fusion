@@ -90,3 +90,13 @@ def fuse_box_lateral(uv, depth, box, K, inner=INNER, gap=1.0, min_pts=3):
 def mono_depth(K, box, height=MONO_HEIGHT):
     """Baseline caméra seule : profondeur depuis la hauteur de boîte (véhicule supposé de `height` m)."""
     return float(K[0, 0] * height / max(box[3] - box[1], 1.0))
+
+
+def ground_depth(K, box, cam_height, v_horizon=None):
+    """Baseline caméra seule "plan du sol" : profondeur (le long de l'axe optique) du point de contact du véhicule
+    avec la route, lu au bord bas de la boîte : z = f_y * h / (v_bas - v_horizon), pour une caméra à `cam_height` m
+    du sol, sans tangage, sur route plane (v_horizon = cy par défaut). Plus réaliste que la hauteur fixe de
+    véhicule (mono_depth) ; reste sensible à la pente de la route et à la précision du bord bas de la boîte."""
+    v0 = K[1, 2] if v_horizon is None else v_horizon
+    dv = box[3] - v0
+    return float(K[1, 1] * cam_height / dv) if dv > 1.0 else None
