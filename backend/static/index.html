@@ -37,7 +37,8 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:4px 6px;b
 <label>Scénario</label><select id="scenario"></select>
 <label>Vitesse de l'ego (km/h)</label><input id="v0" type="number" value="50" min="10" max="90">
 <label>Écart initial (m)</label><input id="gap" type="number" value="60" min="10" max="80">
-<label>Vitesse de la cible (km/h, braking / follow / approach)</label><input id="lead_speed" type="number" value="50" min="5" max="90">
+<label>Vitesse de la cible (km/h, braking / follow / approach)</label><input id="lead_speed" type="number" value="30" min="5" max="90">
+<div id="need" class="muted" style="font-size:12px;margin-top:6px"></div>
 <label>Instant du freinage de la cible (s, braking)</label><input id="lead_brake_t" type="number" value="3" min="0" max="20" step="0.5">
 <label><input id="aeb" type="checkbox" checked>AEB activé (décocher = témoin)</label>
 <label>Fréquence perception + AEB</label><select id="perception_hz"><option value="20">20 Hz (référence)</option><option value="10">10 Hz</option><option value="5">5 Hz</option></select>
@@ -102,13 +103,22 @@ const SC={NORMAL:0,WARNING:1,PARTIAL_BRAKING:2,EMERGENCY_BRAKING:3};
 const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 async function api(p,o){const r=await fetch(p,o);if(!r.ok){let d=await r.text();try{d=JSON.parse(d).detail}catch{}throw new Error(d)}return r.json()}
 async function carla(){try{const c=await api('/api/carla');$('carla').innerHTML=`<span class="dot ${c.reachable?'on':''}"></span>CARLA ${c.reachable?'connecté':'injoignable'} (${c.host}:${c.port})`}catch{}}
+
+// Valeurs de départ par scénario : celles validées en CARLA sur Town10HD_Opt (tronçon droit le plus long : 95 m).
+// Route nécessaire (m) = écart + 5 + trajet de la cible + marge, comme dans scripts/11_aeb_closed_loop.py.
+const SCEN={stopped:{gap:60,lead:30,brake_t:3},braking:{gap:20,lead:30,brake_t:1},adjacent:{gap:60,lead:30,brake_t:3},follow:{gap:15,lead:30,brake_t:3},approach:{gap:25,lead:30,brake_t:3}};
+function needM(sc,gap,lead,bt){const vl=lead/3.6;return sc==='braking'?gap+5+vl*bt+vl*vl/8+10:(sc==='follow'||sc==='approach')?gap+5+vl*4+15:sc==='adjacent'?gap+30:gap+30}
+function scenDefaults(){const d=SCEN[$('scenario').value];if(!d)return;$('gap').value=d.gap;$('lead_speed').value=d.lead;$('lead_brake_t').value=d.brake_t;needHint()}
+function needHint(){const n=needM($('scenario').value,+$('gap').value,+$('lead_speed').value,+$('lead_brake_t').value);
+ $('need').innerHTML=`Route droite nécessaire : environ ${n.toFixed(0)} m`+(n>95&&$('town').value==='Town10HD_Opt'?` <span class="err">(Town10HD_Opt n'a que 95 m : réduire l'écart ou changer de carte)</span>`:'')}
+function campDefaults(){const d=SCEN[$('c_scenario').value];if(!d)return;$('c_gap').value=d.gap;$('c_lead').value=d.lead;$('c_same').checked=$('c_scenario').value==='follow'}
 function kindUI(){const a=$('kind').value==='aeb';$('g_aeb').classList.toggle('hide',!a);$('g_obs').classList.toggle('hide',a)}
 async function init(){const o=await api('/api/options');
  $('town').innerHTML=o.towns.map(t=>`<option>${t}</option>`).join('');$('town').value='Town10HD_Opt';
  $('weather').innerHTML=o.weathers.map(t=>`<option>${t}</option>`).join('');
  $('scenario').innerHTML=o.scenarios.map(t=>`<option>${t}</option>`).join('');
  $('c_scenario').innerHTML=o.scenarios.map(t=>`<option>${t}</option>`).join('');
- $('kind').onchange=kindUI;kindUI();carla();setInterval(carla,5000);runs();setInterval(runs,4000)}
+ $('kind').onchange=kindUI;kindUI();$('scenario').onchange=scenDefaults;['gap','lead_speed','lead_brake_t'].forEach(i=>$(i).oninput=needHint);$('town').onchange=needHint;$('c_scenario').onchange=campDefaults;scenDefaults();carla();setInterval(carla,5000);runs();setInterval(runs,4000)}
 function resText(x){if(x.kind!=='aeb')return x.n_detections==null?'-':`${x.n_frames} images, ${x.n_detections} détections (${x.n_with_lidar} avec LiDAR)`;
  if(x.collided==null)return '-';return (x.collided?'<span class="err">collision</span>':'sans collision')+`, écart min ${x.min_gap_m} m, état max ${x.max_state}`}
 async function runs(){const r=await api('/api/runs');
