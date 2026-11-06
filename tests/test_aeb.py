@@ -145,3 +145,22 @@ def test_aeb_relache_quand_la_menace_disparait():
     for _ in range(40):
         out = aeb.step([_Piste(40.0, 3.0)], 6.0)          # a_req ~ 0,1 : menace levée
     assert out.state == NORMAL
+
+
+# Mesures (distance, latéral) relevées à 5 Hz pendant le dépassement d'un véhicule arrêté dans la voie voisine
+# (CARLA, 50 km/h, graine 43). Deux détections voisines du même véhicule (11,4 m / 3,8 m puis 10,3 m / 2,7 m) créaient
+# une piste dont la vitesse latérale initiale (-5 m/s) l'extrapolait dans le couloir : freinage d'urgence parasite.
+DEPASSEMENT = [[(15.8, 3.2), (36.1, 6.4)], [(13.9, 3.2), (36.1, 6.4)], [(11.1, 3.1), (11.4, 3.8), (25.0, 6.0)],
+               [(8.6, 3.0), (10.3, 2.7)], [(5.8, 2.9), (18.9, 5.7)], [(3.2, 2.7), (13.1, 4.7), (5.0, 3.2)],
+               [(2.5, 2.5), (7.0, 5.8)], [(19.4, 16.0)]]
+
+
+def _depassement(vy_init_std):
+    tr = Tracker(0.2, model="ca", jerk=2.0, vy_init_std=vy_init_std)
+    aeb = AEB(AEBConfig(use_lead_decel=True, t_latency=0.85), 0.2)
+    return max(aeb.step(tr.step(m), 13.88).state for m in DEPASSEMENT)
+
+
+def test_depassement_a_5hz_ne_declenche_pas_le_freinage():
+    assert _depassement(2.0) == NORMAL
+    assert _depassement(8.0) == EMERGENCY_BRAKING     # ancien a priori : reproduit l'événement CARLA

@@ -66,6 +66,27 @@ def fuse_box(uv, depth, box):
     return front_cluster(lidar_in_box(uv, depth, box))
 
 
+def fuse_box_lateral(uv, depth, box, K, inner=INNER, gap=1.0, min_pts=3):
+    """Comme fuse_box, mais renvoie aussi le latéral (m, droite positif) du premier groupe de points LiDAR,
+    calculé point par point : lat_i = (u_i - cx) * profondeur_i / f. Contrairement au centre de la boîte, il
+    reste correct quand la boîte est tronquée au bord de l'image (véhicule dépassé à faible distance).
+    Retourne (profondeur médiane ou None, nombre de points, latéral médian ou None) ; la profondeur est
+    identique à celle de fuse_box."""
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    hw, hh = (box[2] - box[0]) / 2 * inner, (box[3] - box[1]) / 2 * inner
+    idx = np.flatnonzero((np.abs(uv[:, 0] - cx) <= hw) & (np.abs(uv[:, 1] - cy) <= hh))
+    if len(idx) < min_pts:
+        return None, 0, None
+    order = idx[np.argsort(depth[idx])]
+    d = depth[order]
+    for grp in np.split(np.arange(len(order)), np.flatnonzero(np.diff(d) > gap) + 1):
+        if len(grp) >= min_pts:
+            sel = order[grp]
+            lat = float(np.median((uv[sel, 0] - K[0, 2]) * depth[sel] / K[0, 0]))
+            return float(np.median(depth[sel])), len(sel), lat
+    return None, 0, None
+
+
 def mono_depth(K, box, height=MONO_HEIGHT):
     """Baseline caméra seule : profondeur depuis la hauteur de boîte (véhicule supposé de `height` m)."""
     return float(K[0, 0] * height / max(box[3] - box[1], 1.0))

@@ -38,7 +38,7 @@ import carla
 from fusion.config import CFG
 from fusion import geometry as geo
 from fusion.rig import WEATHER, fetch, spawn_sensors, lidar_points
-from fusion.perception import fuse_box, project_lidar
+from fusion.perception import fuse_box_lateral, project_lidar
 from fusion.adas import AEB, AEBConfig, FaultInjector, Tracker
 
 STATE_COLOR = {0: (0, 200, 0), 1: (0, 200, 255), 2: (0, 140, 255), 3: (0, 0, 255)}
@@ -140,6 +140,8 @@ def main():
                     help="fréquence de la perception + tracker + AEB (20 = chaque tick ; le frein est maintenu entre deux)")
     ap.add_argument("--confirm-s", type=float, default=0.15,
                     help="durée de persistance exigée avant qu'une piste soit confirmée (s) ; 0 = 2 mesures seulement")
+    ap.add_argument("--lateral-source", choices=["lidar", "box"], default="lidar",
+                    help="latéral de la mesure : médiane des points LiDAR du groupe (défaut) ou centre de la boîte (ancien)")
     ap.add_argument("--ghost-prob", type=float, default=0.0, help="injection : probabilité par image de démarrer une fausse détection dans le couloir")
     ap.add_argument("--ghost-len", type=int, default=1, help="injection : durée d'une fausse détection (images traitées)")
     ap.add_argument("--drop-prob", type=float, default=0.0, help="injection : probabilité de perdre une mesure")
@@ -307,11 +309,11 @@ def main():
                 infer_ms.append(1000 * (time.time() - t0))
                 meas, dets = [], []
                 for b, c in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()):
-                    d_l, n_c = fuse_box(uv, depth, b)
+                    d_l, n_c, lat_l = fuse_box_lateral(uv, depth, b, K)
                     if d_l is None:
                         continue
-                    u_c = (b[0] + b[2]) / 2
-                    meas.append((d_l - cam_to_bumper, (u_c - K[0, 2]) * d_l / K[0, 0]))
+                    lat = lat_l if args.lateral_source == "lidar" else ((b[0] + b[2]) / 2 - K[0, 2]) * d_l / K[0, 0]
+                    meas.append((d_l - cam_to_bumper, lat))
                     dets.append((b, d_l, n_c))
                 if faults.active:
                     meas = faults.apply(meas, ev, pdt)
@@ -345,6 +347,9 @@ def main():
                         "tgt_lat": round(tgt.lateral, 2) if tgt else "",
                         "tgt_closing": round(tgt.closing_speed, 2) if tgt else "",
                         "n_tracks_all": len(tracker.tracks),
+                        "meas_all": ";".join(f"{m_[0]:.1f}/{m_[1]:.1f}" for m_ in meas),
+                        "trks_all": ";".join(f"{t_.id}{'c' if t_.confirmed else 'u'}:{t_.range:.1f}/{t_.lateral:.1f}/{t_.closing_speed:.1f}"
+                                             for t_ in tracker.tracks),
                         "ttc": round(out.ttc, 3) if out.ttc is not None else "",
                         "a_req": round(out.a_req, 3) if np.isfinite(out.a_req) else "inf",
                         "state": out.state_name, "brake": out.brake})

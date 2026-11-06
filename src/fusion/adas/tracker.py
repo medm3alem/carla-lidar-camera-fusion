@@ -43,7 +43,7 @@ class Track:
 
 class Tracker:
     def __init__(self, dt, r_pos=0.3, sigma_a=6.0, v_init_std=8.0,
-                 confirm_hits=2, max_misses=3, model="cv", jerk=15.0, a_init_std=4.0):
+                 confirm_hits=2, max_misses=3, model="cv", jerk=15.0, a_init_std=4.0, vy_init_std=2.0):
         assert model in ("cv", "ca")
         self.model, self.jerk, self.a_init_std = model, jerk, a_init_std
         self.n = 4 if model == "cv" else 6
@@ -51,6 +51,10 @@ class Tracker:
         self.R = np.diag([r_pos ** 2, r_pos ** 2])
         self.sigma_a = sigma_a
         self.v_init_std = v_init_std
+        # Vitesse latérale relative à l'initialisation : a priori faible (m/s). La vitesse longitudinale reste très
+        # incertaine (8 m/s) car une piste neuve ignore le rapprochement ; avec 8 m/s en latéral, deux mesures
+        # décalées de 1 m à 5 Hz donnaient -5 m/s et la piste, extrapolée, entrait dans le couloir.
+        self.vy_init_std = vy_init_std
         self.confirm_hits = confirm_hits
         self.max_misses = max_misses
         self.gate_x = 2.0 + 25.0 * dt          # m : tient compte du déplacement relatif entre 2 images
@@ -124,7 +128,7 @@ class Tracker:
 
         for mi, (mx, my) in enumerate(measurements):
             if mi not in used_m:
-                d = [self.R[0, 0], self.R[1, 1], self.v_init_std ** 2, self.v_init_std ** 2]
+                d = [self.R[0, 0], self.R[1, 1], self.v_init_std ** 2, self.vy_init_std ** 2]
                 x0 = [mx, my, 0.0, 0.0]
                 if self.n == 6:
                     d += [self.a_init_std ** 2, self.a_init_std ** 2]
