@@ -124,7 +124,7 @@ class _Piste:
 
 
 def _tient_le_frein(hysteresis):
-    aeb = AEB(AEBConfig(hysteresis=hysteresis), dt=0.05)
+    aeb = AEB(AEBConfig(a_warn=1.5, a_partial=2.5, a_emergency=3.5, brake_partial=0.6, hysteresis=hysteresis), dt=0.05)
     for _ in range(4):                                    # a_req = 2,63 m/s^2 : freinage partiel
         out = aeb.step([_Piste(24.0, 10.0)], 12.0)
     assert out.state == PARTIAL_BRAKING

@@ -31,16 +31,30 @@ puis suivi (Kalman) et freinage d'urgence automatique (AEB) validé en boucle fe
 - **AEB** : machine d'états NORMAL / WARNING / PARTIAL / EMERGENCY pilotée par la décélération requise
   `a_req = v² / (2 (x - v·t_latence - marge))`, confirmation sur 2 images, hystérésis à la désescalade,
   anticipation optionnelle d'une cible qui freine. Seuils calibrés sur la décélération mesurée de la voiture
-  CARLA (≈ 4 m/s² à 70 km/h à frein 100 %), pas sur des valeurs homologuées.
+  CARLA (≈ 4 m/s² à 70 km/h à frein 100 %), pas sur des valeurs homologuées. Jeu par défaut : alerte / partiel /
+  urgence à 2,0 / 3,0 / 4,0 m/s² de décélération requise, frein partiel à 70 %. `AEBConfig.conservative()` garde
+  le jeu précédent (1,5 / 2,5 / 3,5, 60 %), qui freine ~0,7 s plus tôt à 50 km/h.
 
 ## AEB : résultats mesurés (CARLA, 20 Hz, Town10HD_Opt, météo claire)
 Banc de test maison : conducteur et régulateur de l'ego écrits pour l'essai, pas de trafic. 2 à 4 graines par cas.
 
 | Scénario | Résultat |
 |---|---|
-| Cible arrêtée, 30 / 50 / 70 km/h (4 graines) | 0 collision ; écart minimal médian 11,9 / 9,2 / 4,3 m |
-| Cible qui freine, 50 km/h, écart 20 et 25 m (2 graines) | 0 collision (sans anticipation : 2/2 collisions, impact 23 km/h à 20 m) |
+| Cible arrêtée, 30 / 50 / 70 km/h (3 graines, écart de départ 50 m) | 0 collision ; écart minimal médian 9,9 / 7,6 / 3,3 m ; TTC au premier freinage 1,8 / 2,5 / 2,4 s |
+| Idem avec le jeu conservateur | 0 collision ; 11,9 / 9,2 / 4,3 m ; TTC 2,1 / 3,2 / 2,4 s |
+| Cible qui freine (1 s après le départ), 50 km/h, écart 20 m (2 graines) | 0 collision, écart minimal 8,6 m (sans anticipation de la décélération de la cible : 2/2 collisions, impact 23 km/h) |
+| 70 km/h avec plus de place (écart de départ 60 m, 3 graines) | 0 collision, écart minimal médian 13,2 m |
 | Cible hors couloir, suivi à même vitesse, approche normale | 0 freinage parasite observé (alerte seule en approche à 20 et 18 m) |
+
+À 70 km/h avec 50 m de départ, la distance est déjà inférieure à la distance d'arrêt : le freinage part dès la
+première détection quel que soit le seuil, donc cette ligne ne départage pas les jeux de seuils.
+
+**Fréquence de perception** (`--perception-hz`, cible arrêtée, écart de départ 60 m, 2 graines, écart minimal médian) :
+20 Hz : 7,6 m à 50 km/h pour 50 m de départ (13,2 m à 70 km/h pour 60 m) ; 10 Hz : 8,0 / 11,5 m (50 / 70 km/h) ;
+5 Hz : 5,3 / 6,5 m. Sans correction de la latence supposée, à 5 Hz le même jeu provoquait une collision
+(13 km/h) sur 1 des 2 essais à 50 km/h. L'AEB ajoute donc ≈ 3 périodes de calcul à la latence quand la perception est sous
+20 Hz (maintien du frein + confirmation) ; c'est une hypothèse de modèle, dont les effets sont validés
+sur la cible arrêtée seulement, pas sur les scénarios non dangereux à 5 et 10 Hz.
 
 Les CSV figés sont dans `reference/` (`aeb_*_v3_*.csv`). Ils sont reproductibles avec
 `python scripts\12_aeb_campaign.py --scenario stopped --speeds 30 50 70 --weathers clear --seeds 42 43 44 45`.
@@ -56,13 +70,29 @@ une petite mémoire tampon), état de l'AEB, décélération requise, écart ; �
 injection de défauts (fausses détections de durée réglable, pertes de mesure, bruit de distance).
 Un seul run à la fois (une instance CARLA, un GPU). Tests de l'API sans CARLA : `python -m pytest tests`.
 
-### Robustesse aux fausses détections (modèle hors CARLA, `tests/test_faults.py`)
-Sur route dégagée à 50 km/h, avec ~6 fausses détections par essai de 30 s (chacune dans le couloir, avec une
-mesure LiDAR plausible) : une détection isolée d'**une** image ne déclenche jamais de freinage (0/40 essais), mais
-une durée de **2 images** déclenche au moins un freinage dans 17/40 essais à 20 Hz, et de 3 images dans 39/40.
-C'est une faiblesse connue : la confirmation actuelle (2 mesures du tracker + 2 images de l'AEB) est courte.
-Ce résultat vient d'un modèle de défauts simple, pas du détecteur réel ; à confirmer en boucle fermée avec
-`--ghost-prob` / `--ghost-len` et à traiter (durcir la confirmation et mesurer le retard de freinage induit).
+### Robustesse aux fausses détections
+Test de contrainte (pas un taux réaliste) : à 50 km/h, route dégagée, une fausse détection dans le couloir (avec
+mesure LiDAR plausible) démarre avec une probabilité de 0,10 par image, soit environ 8 événements par essai de 4 s.
+Fréquence des essais avec au moins un freinage parasite, prédite par le modèle hors CARLA (`tests/test_faults.py`,
+200 simulations) puis mesurée en boucle fermée dans CARLA (6 graines), avec confirmation de piste sur 2 mesures :
+
+| Durée de la fausse détection | Modèle hors CARLA | CARLA (6 essais) |
+|---|---|---|
+| 1 image | 14 % | 1/6 |
+| 2 images | 49 % | 3/6 |
+| 3 images | 98,5 % | 6/6 |
+
+Le modèle hors CARLA prévoit bien les mesures. La confirmation courte (2 mesures du tracker + 2 images de l'AEB)
+est donc une faiblesse réelle. Modèle de défauts simple : les statistiques de persistance des fausses détections du
+détecteur réel ne sont pas mesurées.
+
+**Correction** : la piste n'est confirmée qu'après 0,15 s de persistance (`--confirm-s`, défaut 0,15 : 4 mesures à
+20 Hz, 3 à 10 Hz, 2 à 5 Hz ; 0 = ancien comportement). En CARLA, mêmes conditions, 6 graines : **0/6 freinage** pour des
+fausses détections de 1, 2 et 3 images (le modèle hors CARLA en prévoit 0 %, 17 % et 20 %, soit 0 à 1 essai sur 6 :
+ce résultat est compatible avec lui, il ne le prouve pas). Une fausse détection de 4 images ou plus freine toujours
+(100 % prédit, non mesuré en CARLA). Pas de régression sur la cible arrêtée à 20 Hz (mêmes écarts minimaux et mêmes
+distances de premier freinage) ; le retard ajouté si l'obstacle apparaît à 20-25 m est d'environ 0,7 m à 50 km/h
+(modèle hors CARLA).
 
 ## Reproduire
 ```
@@ -82,3 +112,6 @@ sont dans reference/.
 - L'AEB est validé à 20 Hz ; le Worker web actuel tourne à 5 Hz, où le banc cinématique donne des collisions
   à haute vitesse. Pas encore de test avec bruit capteur ou fausses détections injectées.
 - Les freinages parasites ne sont mesurés que sur trois scénarios simples, pas sur du trafic réel.
+- Cas ouvert : à 5 Hz, en passant à côté d'une cible arrêtée dans la voie voisine (50 km/h), un freinage d'urgence
+  parasite est apparu sur 2 essais de la graine 43, puis pas sur un troisième ; cause non identifiée (hypothèse : position
+  latérale erronée quand la boîte est tronquée au bord de l'image). Ni à 10 Hz ni à 20 Hz.

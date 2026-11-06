@@ -23,7 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FIELDS = ["case", "scenario", "v0", "gap", "weather", "seed", "aeb", "collided", "impact_kmh",
-          "min_gap_m", "gap_start_m", "t_warn", "t_brake", "final_speed_kmh", "v_start_kmh", "v_brake_kmh", "n_brake_ticks", "max_state", "error"]
+          "min_gap_m", "gap_start_m", "t_warn", "t_brake", "final_speed_kmh", "v_start_kmh", "v_brake_kmh", "gap_brake", "ttc_brake", "n_brake_ticks", "max_state", "error"]
 
 
 def run_case(py, args, v0, weather, seed, aeb, out_dir):
@@ -43,6 +43,12 @@ def run_case(py, args, v0, weather, seed, aeb, out_dir):
     return json.loads(new[-1].read_text())
 
 
+def med(vals):
+    """Médiane des valeurs numériques présentes, '-' s'il n'y en a pas (pas de freinage ou ancien CSV)."""
+    v = [float(x) for x in vals if x not in (None, "", "None")]
+    return f"{statistics.median(v):.1f}" if v else "-"
+
+
 def to_row(case, args, v0, weather, seed, aeb, s):
     if s is None:
         return {"case": case, "scenario": args.scenario, "v0": v0, "gap": args.gap, "weather": weather,
@@ -52,6 +58,7 @@ def to_row(case, args, v0, weather, seed, aeb, s):
             "min_gap_m": s.get("min_gap_m"), "gap_start_m": s.get("gap_start_m"),
             "t_warn": s.get("t_first_warning_s"), "t_brake": s.get("t_first_brake_s"),
             "final_speed_kmh": s.get("ego_final_speed_kmh"), "v_start_kmh": s.get("ego_speed_start_kmh"), "v_brake_kmh": s.get("ego_speed_at_first_brake_kmh"),
+            "gap_brake": s.get("gap_at_first_brake_m"), "ttc_brake": s.get("ttc_at_first_brake_s"),
             "n_brake_ticks": s.get("n_brake_ticks"),
             "max_state": s.get("max_state"), "error": s.get("error")}
 
@@ -121,14 +128,15 @@ def main():
             print(f"{v0:>6.0f} km/h{'AEB':>10}{len(rs):>8}{nb:>9}/{len(rs):<5}{nw:>20}/{len(rs)}")
         print(f"\nrésultats : {res_path}")
         return
-    print(f"\n{'vitesse':>8}{'mode':>10}{'essais':>8}{'collisions':>12}{'impact moy.':>13}{'écart min méd.':>16}{'écart pire':>12}{'v réelle départ':>17}")
+    print(f"\n{'vitesse':>8}{'mode':>10}{'essais':>8}{'collisions':>12}{'impact moy.':>13}{'écart min méd.':>16}{'écart pire':>12}{'v réelle départ':>17}{'gap 1er frein':>15}{'TTC 1er frein':>15}")
     for (v0, aeb), rs in sorted(agg.items()):
         col = [str(r["collided"]) in ("True", "true") for r in rs]
         imp = [float(r["impact_kmh"]) for r, c in zip(rs, col) if c]
         gaps = sorted(float(r["min_gap_m"]) for r in rs)
         print(f"{v0:>6.0f} km/h{'AEB' if aeb else 'témoin':>10}{len(rs):>8}{sum(col):>6}/{len(rs):<5}"
               f"{(sum(imp) / len(imp) if imp else 0):>11.1f}{statistics.median(gaps):>16.1f}{gaps[0]:>12.1f}"
-              f"{sum(float(r['v_start_kmh'] or 0) for r in rs) / len(rs):>17.1f}")
+              f"{sum(float(r['v_start_kmh'] or 0) for r in rs) / len(rs):>17.1f}"
+              f"{med([r.get('gap_brake') for r in rs]):>15}{med([r.get('ttc_brake') for r in rs]):>15}")
     n_err = sum(1 for r in rows if r.get("error") not in ("", None))
     print(f"\nrésultats : {res_path}" + (f"   ({n_err} essais en erreur)" if n_err else ""))
 

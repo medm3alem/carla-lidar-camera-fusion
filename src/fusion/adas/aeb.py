@@ -30,12 +30,14 @@ class AEBConfig:
     ttc_warn: float = 2.6                # alerte seulement
     # Seuils calibrés sur la décélération mesurée de la voiture CARLA (4 à 6 m/s^2 à frein 100 %, et non 8).
     # Voir AEBConfig.legacy() pour les valeurs initiales (calées sur 8 m/s^2), gardées pour comparaison.
-    a_warn: float = 1.5                  # m/s^2 : décélération requise -> alerte
-    a_partial: float = 2.5               # -> freinage partiel
-    a_emergency: float = 3.5             # -> freinage d'urgence
+    # Défauts = jeu "B", choisi après balayage en boucle fermée (voir README) : freinage plus tardif que
+    # AEBConfig.conservative() (1,5 / 2,5 / 3,5 / 0,6), qui déclenchait à TTC ~3 s à 50 km/h (gênant à juger).
+    a_warn: float = 2.0                  # m/s^2 : décélération requise -> alerte
+    a_partial: float = 3.0               # -> freinage partiel
+    a_emergency: float = 4.0             # -> freinage d'urgence (la voiture CARLA freine à ~4,1 m/s^2 à 70 km/h)
     t_latency: float = 0.4               # s : actionnement + traitement
     stop_margin: float = 1.0             # m : distance d'arrêt visée devant l'obstacle
-    brake_partial: float = 0.6
+    brake_partial: float = 0.7
     brake_emergency: float = 1.0
     confirm_frames: int = 2
     release_hold_s: float = 1.0
@@ -50,6 +52,11 @@ class AEBConfig:
     lead_decel_min: float = 3.0          # m/s^2 : ~4 écarts-types du bruit d'estimation (saccade 2 m/s^3)
     lead_decel_frames: int = 3           # images consécutives sous le seuil avant d'anticiper
     lead_decel_cap: float = 8.0          # m/s^2 : plafond de la décélération supposée de la cible
+
+    @classmethod
+    def conservative(cls):
+        """Jeu précédent (freinage plus précoce, marge d'arrêt plus grande) : 9,2 m à 50 km/h au lieu de 7,6 m."""
+        return cls(a_warn=1.5, a_partial=2.5, a_emergency=3.5, brake_partial=0.6)
 
     @classmethod
     def legacy(cls):

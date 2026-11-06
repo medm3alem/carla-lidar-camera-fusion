@@ -138,6 +138,8 @@ def main():
                     help="anticipe l'arrêt d'une cible qui freine (exige --tracker ca ; actif par défaut avec ca)")
     ap.add_argument("--perception-hz", type=int, choices=[20, 10, 5], default=20,
                     help="fréquence de la perception + tracker + AEB (20 = chaque tick ; le frein est maintenu entre deux)")
+    ap.add_argument("--confirm-s", type=float, default=0.15,
+                    help="durée de persistance exigée avant qu'une piste soit confirmée (s) ; 0 = 2 mesures seulement")
     ap.add_argument("--ghost-prob", type=float, default=0.0, help="injection : probabilité par image de démarrer une fausse détection dans le couloir")
     ap.add_argument("--ghost-len", type=int, default=1, help="injection : durée d'une fausse détection (images traitées)")
     ap.add_argument("--drop-prob", type=float, default=0.0, help="injection : probabilité de perdre une mesure")
@@ -248,7 +250,8 @@ def main():
         pdt = CFG.dt * div                                    # pas de la perception, du tracker et de l'AEB
         faults = FaultInjector(args.ghost_prob, args.ghost_len, drop_prob=args.drop_prob,
                                noise_sigma=args.noise_sigma, seed=args.seed)
-        tracker = Tracker(pdt, model=args.tracker, jerk=args.jerk)
+        confirm_hits = max(2, round(args.confirm_s / pdt) + 1)    # 4 mesures à 20 Hz, 3 à 10 Hz, 2 à 5 Hz
+        tracker = Tracker(pdt, model=args.tracker, jerk=args.jerk, confirm_hits=confirm_hits)
         ov = {k: v for k, v in (("a_warn", args.a_warn), ("a_partial", args.a_partial),
                                 ("a_emergency", args.a_emergency), ("t_latency", args.t_latency),
                                 ("brake_partial", args.brake_partial)) if v is not None}
@@ -257,6 +260,10 @@ def main():
             if args.tracker != "ca":
                 raise RuntimeError("--lead-decel exige --tracker ca")
             ov["use_lead_decel"] = True
+        if args.t_latency is None and pdt > CFG.dt + 1e-9:
+            # Perception plus lente : maintien du frein entre deux calculs (jusqu'à une période) et confirmation
+            # sur 2 mesures du tracker + 2 images de l'AEB, soit environ 3 périodes de plus qu'à 20 Hz.
+            ov["t_latency"] = round(AEBConfig().t_latency + 3.0 * (pdt - CFG.dt), 3)
         aeb = AEB(AEBConfig(**ov), pdt)
         summary["aeb_overrides"] = ov
         cam_to_bumper = ext_e - CFG.cam_pos[0]               # la profondeur LiDAR est mesurée depuis la caméra
@@ -326,10 +333,18 @@ def main():
             lead.apply_control(lead_control(t))
 
             g = true_gap()
+            tgt = next((t_ for t_ in tracks if t_.id == out.target_id), None) if out.target_id is not None else None
             min_gap = min(min_gap, g)
             log.append({"t": round(t, 3), "ego_v": round(ev, 3), "lead_v": round(vlv, 3), "gap_true": round(g, 3),
                         "n_det": len(dets), "n_tracks": len(tracks),
                         "meas_range": round(meas[0][0], 3) if meas else "",
+                        "trk_range": round(min(tracks, key=lambda t_: t_.range).range, 2) if tracks else "",
+                        "trk_lat": round(min(tracks, key=lambda t_: t_.range).lateral, 2) if tracks else "",
+                        "trk_closing": round(min(tracks, key=lambda t_: t_.range).closing_speed, 2) if tracks else "",
+                        "tgt_range": round(tgt.range, 2) if tgt else "",
+                        "tgt_lat": round(tgt.lateral, 2) if tgt else "",
+                        "tgt_closing": round(tgt.closing_speed, 2) if tgt else "",
+                        "n_tracks_all": len(tracker.tracks),
                         "ttc": round(out.ttc, 3) if out.ttc is not None else "",
                         "a_req": round(out.a_req, 3) if np.isfinite(out.a_req) else "inf",
                         "state": out.state_name, "brake": out.brake})
@@ -381,6 +396,9 @@ def main():
             "aeb_enabled": not args.no_aeb, "error": None,
             "ego_speed_start_kmh": round(log[0]["ego_v"] * 3.6, 1) if log else None,
             "ego_speed_at_first_brake_kmh": next((round(r_["ego_v"] * 3.6, 1) for r_ in log if r_["brake"] > 0), None),
+            "gap_at_first_brake_m": next((round(r_["gap_true"], 1) for r_ in log if r_["brake"] > 0), None),
+            "ttc_at_first_brake_s": next((round(r_["gap_true"] / max(r_["ego_v"] - r_["lead_v"], 0.1), 2)
+                                          for r_ in log if r_["brake"] > 0), None),
             "n_brake_ticks": sum(1 for r_ in log if r_["brake"] > 0),
             "n_warning_ticks": sum(1 for r_ in log if r_["state"] != "NORMAL"),
             "max_state": max((r_["state"] for r_ in log), key=["NORMAL", "WARNING", "PARTIAL_BRAKING",
