@@ -4,3 +4,8 @@ runs/
 legacy/data/
 __pycache__/
 *.pt
+# Références figées pour la non-régression (versionnées)
+!reference/
+!reference/**
+!models/
+models/*.pt

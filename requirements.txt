@@ -1,0 +1,7 @@
+# Environnement de référence : Windows, Python 3.12, CARLA 0.9.16
+# CARLA : wheel locale, non installable depuis PyPI
+#   pip install C:\CARLA\<...>\PythonAPI\carla\dist\carla-0.9.16-cp312-cp312-win_amd64.whl
+torch==2.11.0+cu128      # pip install torch --index-url https://download.pytorch.org/whl/cu128
+ultralytics==8.4.155
+numpy
+opencv-python
