@@ -84,6 +84,31 @@ première détection quel que soit le seuil, donc cette ligne ne départage pas 
 20 Hz (maintien du frein + confirmation) ; c'est une hypothèse de modèle, dont les effets sont validés
 sur la cible arrêtée seulement, pas sur les scénarios non dangereux à 5 et 10 Hz.
 
+### Seconde ville : Town03
+Mêmes scripts, mêmes réglages, 2 graines (42, 43) sauf mention ; CARLA lancé **sans** `-quality-level=Low` (avec
+cette option, le chargement de Town03 a planté sur « Shader compilation failures are Fatal » sur ma machine, cause non
+élucidée). Le rendu change légèrement le 50 km/h : le témoin Town10 est donc refait dans le même mode. Le détecteur est
+entraîné sur Town10 (à confirmer, voir plus haut) : Town03 teste aussi sa généralisation.
+
+| Scénario (50 m d'écart sauf mention) | Town03, rendu par défaut | Town10, même rendu | Town10, rendu Low (tableau principal) |
+|---|---|---|---|
+| Cible arrêtée 30 / 50 / 70 km/h : collisions | 0/2 chacun | 0/2 chacun | 0/2 chacun |
+| idem : écart minimal médian (m) | 9,9 / 9,6 / 3,9 | 10,2 / 8,4 / 3,3 | 9,9 / 7,7 / 3,3 |
+| idem : pire écart (m) | 9,3 / 9,2 / 3,2 | 10,0 / 8,3 / 3,2 | 9,9 / 7,6 / 3,2 |
+| Cible qui freine, même vitesse, écart 20 m, 50 km/h | 0/2, médian 8,5 m, pire 7,9 | 0/2, 8,6 m | 0/2, 8,6 m |
+| Cible qui freine (30 km/h), écart 45 m, 50 km/h | 0/2, médian 7,5 m, pire 6,7 | 0/2, 8,0 m, pire 7,9 | non mesuré à 45 m |
+| Hors couloir 30 / 50 / 70 km/h, 20 Hz et 5 Hz (3 graines) | 0 freinage, 0 alerte | non refait | 0 freinage (6 graines à 5 Hz) |
+| Suivi à même vitesse (15 m), 30 / 50 km/h | 0/4 freinages | non refait | 0/4 |
+
+Le rendu graphique déplace les écarts de moins d'un mètre à 50 km/h ; les écarts entre villes sont du même ordre
+(≤ 1,2 m pour des écarts de 7 à 10 m, avec 2 graines) : ce sont des indications, pas une différence mesurée.
+
+**Cas non évitable** : une cible à 30 km/h qui s'arrête en 0,5 s avec 20 m d'écart initial (50 km/h pour l'ego) donne
+2 collisions sur 2 (impact ≈ 29 km/h) à Town03 comme à Town10. Le journal montre que l'alerte arrive à 0,2 s mais que
+l'arrêt de la cible survient avec 12-13 m d'écart ; la décélération nécessaire (≈ 4,8 m/s², calcul approché) dépasse celle
+de la voiture (≈ 4,1 m/s², mesurée) même sans latence. Un freinage de la cible plus brutal que ce que le véhicule peut
+absorber ne se corrige pas par l'AEB ; ce scénario n'est pas retenu dans les tableaux.
+
 Les CSV figés sont dans `reference/` (`aeb_*_v3_*.csv`). Ils sont reproductibles avec
 `python scripts\12_aeb_campaign.py --scenario stopped --speeds 30 50 70 --weathers clear --seeds 42 43 44 45`.
 
@@ -133,7 +158,7 @@ Les données (data/) et les runs (runs/) ne sont pas versionnés ; les résultat
 sont dans reference/.
 
 ## Limites connues
-- Simulation uniquement, une seule ville (Town10HD_Opt), peu de graines : ces essais montrent un comportement,
+- Simulation uniquement, deux villes (Town10HD_Opt, Town03), 2 à 6 graines : ces essais montrent un comportement,
   ils ne constituent pas une validation statistique ni une homologation.
 - Le LiDAR CARLA n'est pas dégradé par pluie/brouillard : l'axe météo ne teste que la caméra.
 - Modèles de véhicules identiques entre train et test ; baseline caméra seule naïve (hauteur fixe 1,5 m).

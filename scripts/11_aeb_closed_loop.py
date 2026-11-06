@@ -187,7 +187,9 @@ def main():
     client.set_timeout(30.0)
     world = client.get_world()
     if not world.get_map().name.endswith(args.town):
+        client.set_timeout(180.0)          # un changement de carte (compilation de shaders la première fois) peut être long
         world = client.load_world(args.town)
+        client.set_timeout(30.0)
     original = world.get_settings()
     cmap = world.get_map()
     actors, sensors = [], []
