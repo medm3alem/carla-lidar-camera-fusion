@@ -5,3 +5,8 @@ torch==2.11.0+cu128      # pip install torch --index-url https://download.pytorc
 ultralytics==8.4.155
 numpy
 opencv-python
+# Studio (backend)
+fastapi
+uvicorn[standard]
+# Tests
+pytest

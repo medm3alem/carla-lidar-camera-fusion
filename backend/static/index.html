@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ADAS Validation Studio</title>
+<style>
+:root{--bg:#f6f7f9;--fg:#1c2330;--card:#fff;--line:#d9dde3;--acc:#1f6feb;--ok:#1a7f37;--bad:#b42318}
+@media (prefers-color-scheme:dark){:root{--bg:#12161c;--fg:#e6e9ee;--card:#1b212a;--line:#2d3642;--acc:#58a6ff;--ok:#3fb950;--bad:#f85149}}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:16px;display:grid;gap:16px;grid-template-columns:300px 1fr}
+@media(max-width:800px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
+h1{font-size:18px;margin:0 0 4px}h2{font-size:14px;margin:0 0 10px}
+label{display:block;margin:8px 0 2px;font-size:12px;opacity:.8}
+select,input{width:100%;box-sizing:border-box;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
+button{padding:8px 12px;border:0;border-radius:6px;background:var(--acc);color:#fff;cursor:pointer;margin-top:12px}
+button.stop{background:var(--bad)}button:disabled{opacity:.4;cursor:default}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:var(--bad)}.dot.on{background:var(--ok)}
+img#view{width:100%;border-radius:6px;background:#000;min-height:200px}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
+.muted{opacity:.7}.err{color:var(--bad)}
+</style></head><body>
+<main>
+<section class="card" style="grid-column:1/-1"><h1>ADAS Validation Studio</h1>
+<div class="muted">MVP : caméra RGB, détections YOLO et distances LiDAR. <span id="carla"><span class="dot"></span>CARLA…</span></div></section>
+
+<section class="card"><h2>Configuration</h2>
+<label>Carte</label><select id="town"></select>
+<label>Météo</label><select id="weather"></select>
+<label>Véhicules de trafic</label><input id="n_npc" type="number" value="70" min="0" max="150">
+<label>Durée (s)</label><input id="seconds" type="number" value="30" min="5" max="300">
+<label>Graine</label><input id="seed" type="number" value="42">
+<label>Modèle</label><select id="model"><option value="finetuned">fine-tuné (v4_n)</option><option value="coco">COCO préentraîné</option></select>
+<label>Seuil de confiance</label><input id="conf" type="number" value="0.25" step="0.05" min="0.05" max="0.95">
+<button id="start">Démarrer</button> <button id="stop" class="stop" disabled>Arrêter</button>
+<div id="msg" class="muted" style="margin-top:8px"></div></section>
+
+<section class="card"><h2>Vue <span id="state" class="muted"></span></h2>
+<img id="view" alt="Flux caméra annotée">
+<table id="dets" style="margin-top:10px"><thead><tr><th>#</th><th>Confiance</th><th>Distance LiDAR</th><th>Points</th><th>Estimation caméra</th></tr></thead><tbody></tbody></table></section>
+
+<section class="card" style="grid-column:1/-1"><h2>Runs enregistrés</h2>
+<table id="runs"><thead><tr><th>Run</th><th>État</th><th>Images</th><th>Détections</th><th>Avec LiDAR</th><th>Config</th></tr></thead><tbody></tbody></table>
+<div class="muted" style="margin-top:6px">Données dans <code>runs\studio\&lt;run&gt;\</code> (frames.jsonl, summary.json, images annotées).</div></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);let cur=null,ws=null;
+async function api(p,o){const r=await fetch(p,o);if(!r.ok){let d=await r.text();try{d=JSON.parse(d).detail}catch{}throw new Error(d)}return r.json()}
+async function carla(){try{const c=await api('/api/carla');$('carla').innerHTML=`<span class="dot ${c.reachable?'on':''}"></span>CARLA ${c.reachable?'connecté':'injoignable'} (${c.host}:${c.port})`}catch{}}
+async function init(){const o=await api('/api/options');
+ $('town').innerHTML=o.towns.map(t=>`<option>${t}</option>`).join('');$('town').value='Town10HD_Opt';
+ $('weather').innerHTML=o.weathers.map(t=>`<option>${t}</option>`).join('');
+ carla();setInterval(carla,5000);runs();setInterval(runs,4000)}
+async function runs(){const r=await api('/api/runs');
+ $('runs').querySelector('tbody').innerHTML=r.map(x=>`<tr><td>${x.run_id}</td><td>${x.state}</td><td>${x.n_frames}</td><td>${x.n_detections??'-'}</td><td>${x.n_with_lidar??'-'}</td><td class="muted">${x.config.town||''} ${x.config.weather||''}</td></tr>`).join('')}
+function show(m){const st=m.status;$('state').textContent=`— ${st.state}, ${st.n_frames} images`+(st.error?` — ${st.error}`:'');
+ if(st.error)$('state').className='err';else $('state').className='muted';
+ if(m.image)$('view').src='data:image/jpeg;base64,'+m.image;
+ if(m.frame)$('dets').querySelector('tbody').innerHTML=m.frame.detections.map((d,i)=>`<tr><td>${i+1}</td><td>${d.conf.toFixed(2)}</td><td>${d.lidar_depth==null?'-':d.lidar_depth.toFixed(1)+' m'}</td><td>${d.n_cluster}</td><td>${d.mono_depth.toFixed(1)} m</td></tr>`).join('');
+ if(m.final){$('start').disabled=false;$('stop').disabled=true;runs()}}
+$('start').onclick=async()=>{$('msg').textContent='';
+ const body={town:$('town').value,weather:$('weather').value,n_npc:+$('n_npc').value,seconds:+$('seconds').value,seed:+$('seed').value,model:$('model').value,conf:+$('conf').value};
+ try{const r=await api('/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  cur=r.run_id;$('start').disabled=true;$('stop').disabled=false;$('state').textContent='— démarrage (chargement de la carte et du modèle)…';
+  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/runs/'+cur);ws.onmessage=e=>show(JSON.parse(e.data));
+ }catch(e){$('msg').innerHTML=`<span class="err">${e.message}</span>`}};
+$('stop').onclick=()=>cur&&api(`/api/runs/${cur}/stop`,{method:'POST'});
+init();
+</script></body></html>
