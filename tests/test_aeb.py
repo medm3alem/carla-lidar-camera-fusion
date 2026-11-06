@@ -96,3 +96,23 @@ def test_aeb_garde_le_frein_a_tres_basse_vitesse_pres_d_un_obstacle():
         v = max(1.0, v - (out.brake * 4.5) * dt)      # l'ego ralentit mais reste à ~1 m/s
         r = max(r - v * dt, 5.0)
     assert out.state >= PARTIAL_BRAKING and r < 15.0
+
+
+def test_tracker_ca_estime_une_acceleration_relative():
+    dt, g, v = 0.05, 40.0, 0.0                   # écart croissant : cible qui freine moins vite que l'ego... ici cible qui accélère
+    tr = Tracker(dt, model="ca", jerk=2.0)
+    x, vx = 30.0, -10.0
+    for _ in range(80):
+        vx += 3.0 * dt                           # accélération relative +3 m/s^2
+        x += vx * dt
+        tracks = tr.step([(x, 0.0)])
+    assert abs(tracks[0].rel_accel - 3.0) < 1.0
+
+
+def test_banc_cible_qui_freine_avec_anticipation():
+    from dataclasses import replace
+    cfg = replace(AEBConfig(), use_lead_decel=True)
+    for seed in range(10):
+        r = simulate(v0_kmh=50, gap0=30, lead_speed_kmh=50, lead_brake_t=2.0, lead_decel=5.0, fps=20,
+                     dropout=0.1, seed=seed, cfg=cfg, tracker_model="ca", jerk=2.0)
+        assert not r.collided

@@ -41,6 +41,11 @@ class AEBConfig:
     release_hold_s: float = 1.0
     hold_range: float = 15.0
     stopped_speed: float = 0.5
+    # Anticipation d'une cible qui freine (nécessite Tracker(model="ca")) : désactivée par défaut
+    use_lead_decel: bool = False
+    lead_decel_min: float = 3.0          # m/s^2 : ~4 écarts-types du bruit d'estimation (saccade 2 m/s^3)
+    lead_decel_frames: int = 3           # images consécutives sous le seuil avant d'anticiper
+    lead_decel_cap: float = 8.0          # m/s^2 : plafond de la décélération supposée de la cible
 
     @classmethod
     def legacy(cls):
@@ -69,6 +74,9 @@ class AEB:
         self.state = NORMAL
         self.hist = deque(maxlen=cfg.confirm_frames)
         self.below_time = 0.0
+        self._prev_v = None
+        self.ego_accel = 0.0
+        self._brake_cnt = {}                              # id de piste -> images consécutives de freinage de la cible
 
     def required_decel(self, rng, closing):
         """Décélération (m/s^2) nécessaire pour s'arrêter à stop_margin de l'obstacle, latence comprise."""
@@ -88,14 +96,31 @@ class AEB:
             return WARNING
         return NORMAL
 
+    def required_decel_lead_stop(self, rng, ve, vl, al):
+        """Décélération pour s'arrêter avant le point où la cible (qui freine à `al` < 0) va s'arrêter."""
+        c = self.cfg
+        d_l = vl * vl / (2.0 * min(abs(al), c.lead_decel_cap))
+        room = rng + d_l - ve * c.t_latency - c.stop_margin
+        return float("inf") if room <= 0 else ve * ve / (2.0 * room)
+
     def step(self, tracks, ego_speed):
         c = self.cfg
+        if self._prev_v is not None:                      # accélération de l'ego, filtrée (EMA)
+            self.ego_accel += 0.3 * ((ego_speed - self._prev_v) / self.dt - self.ego_accel)
+        self._prev_v = ego_speed
         in_path = [t for t in tracks if 0 < t.range < c.max_range and abs(t.lateral) < c.corridor_half_width]
         threats = [t for t in in_path if t.closing_speed > c.min_closing]
         target, ttc, a_req, raw = None, None, 0.0, NORMAL
         for t in threats:
             v = t.range / t.closing_speed
             a = self.required_decel(t.range, t.closing_speed)
+            if c.use_lead_decel:
+                al = t.rel_accel + self.ego_accel         # accélération absolue de la cible
+                vl = max(ego_speed - t.closing_speed, 0.0)
+                n = self._brake_cnt.get(t.id, 0) + 1 if (al < -c.lead_decel_min and vl > 0.5) else 0
+                self._brake_cnt[t.id] = n
+                if n >= c.lead_decel_frames:
+                    a = max(a, self.required_decel_lead_stop(t.range, ego_speed, vl, al))
             lvl = self._raw_level(v, a)
             if target is None or lvl > raw or (lvl == raw and v < ttc):
                 target, ttc, a_req, raw = t, v, a, lvl

@@ -27,7 +27,8 @@ FIELDS = ["case", "scenario", "v0", "gap", "weather", "seed", "aeb", "collided",
 
 def run_case(py, args, v0, weather, seed, aeb, out_dir):
     cmd = [py, str(ROOT / "scripts" / "11_aeb_closed_loop.py"), "--scenario", args.scenario,
-           "--lead-speed", str(args.lead_speed),
+           "--lead-speed", str(v0 if args.same_speed else args.lead_speed),
+           "--lead-brake-t", str(args.lead_brake_t), "--lead-brake", str(args.lead_brake),
            "--v0", str(v0), "--gap", str(args.gap), "--weather", weather, "--seed", str(seed),
            "--town", args.town, "--out", str(out_dir)]
     if not aeb:
@@ -61,7 +62,10 @@ def main():
     ap.add_argument("--seeds", type=int, nargs="+", default=[42])
     ap.add_argument("--gap", type=float, default=50.0)
     ap.add_argument("--scenario", choices=["stopped", "braking", "adjacent", "follow", "approach"], default="stopped")
-    ap.add_argument("--lead-speed", type=float, default=30.0, help="km/h (braking, follow)")
+    ap.add_argument("--lead-speed", type=float, default=30.0, help="km/h (braking, follow, approach)")
+    ap.add_argument("--same-speed", action="store_true", help="la cible roule à la vitesse de l'ego (braking)")
+    ap.add_argument("--lead-brake-t", type=float, default=3.0, help="instant où la cible freine (braking), s")
+    ap.add_argument("--lead-brake", type=float, default=0.75, help="consigne de frein de la cible")
     ap.add_argument("--town", default="Town10HD_Opt")
     ap.add_argument("--resume", default=None, help="id d'une campagne à reprendre")
     ap.add_argument("--aeb-opts", default="", help="options AEB transmises à 11, ex. \"--a-partial 3 --a-emergency 4\"")

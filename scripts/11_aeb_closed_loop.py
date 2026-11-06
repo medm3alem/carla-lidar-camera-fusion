@@ -124,6 +124,9 @@ def main():
     ap.add_argument("--a-emergency", type=float, default=None, help="seuil de freinage d'urgence (m/s2)")
     ap.add_argument("--t-latency", type=float, default=None, help="latence supposée (s)")
     ap.add_argument("--brake-partial", type=float, default=None, help="consigne de frein en freinage partiel")
+    ap.add_argument("--tracker", choices=["cv", "ca"], default="cv", help="modèle du tracker (ca = accélération constante)")
+    ap.add_argument("--jerk", type=float, default=2.0, help="bruit de saccade du tracker ca (m/s^3)")
+    ap.add_argument("--lead-decel", action="store_true", help="anticipe l'arrêt d'une cible qui freine (exige --tracker ca)")
     ap.add_argument("--town", default="Town10HD_Opt")
     ap.add_argument("--weather", default="clear", choices=list(WEATHER))
     ap.add_argument("--seed", type=int, default=42)
@@ -163,7 +166,7 @@ def main():
         vl = args.lead_speed / 3.6 if args.scenario in ("braking", "follow", "approach") else 0.0
         # route nécessaire : écart initial + trajet de la cible + marge pour que l'ego s'arrête
         if args.scenario == "braking":
-            need = args.gap + 5.0 + vl * args.lead_brake_t + vl ** 2 / (2 * 4.0) + 25.0
+            need = args.gap + 5.0 + vl * args.lead_brake_t + vl ** 2 / (2 * 4.0) + 10.0
         elif args.scenario in ("follow", "approach"):
             need = args.gap + 5.0 + vl * args.follow_seconds + 15.0
         elif args.scenario == "adjacent":
@@ -220,10 +223,14 @@ def main():
                 fetch(q[n], frame)
 
         K = geo.intrinsics(CFG.img_w, CFG.img_h, CFG.fov)
-        tracker = Tracker(CFG.dt)
+        tracker = Tracker(CFG.dt, model=args.tracker, jerk=args.jerk)
         ov = {k: v for k, v in (("a_warn", args.a_warn), ("a_partial", args.a_partial),
                                 ("a_emergency", args.a_emergency), ("t_latency", args.t_latency),
                                 ("brake_partial", args.brake_partial)) if v is not None}
+        if args.lead_decel:
+            if args.tracker != "ca":
+                raise RuntimeError("--lead-decel exige --tracker ca")
+            ov["use_lead_decel"] = True
         aeb = AEB(AEBConfig(**ov), CFG.dt)
         summary["aeb_overrides"] = ov
         cam_to_bumper = ext_e - CFG.cam_pos[0]               # la profondeur LiDAR est mesurée depuis la caméra
