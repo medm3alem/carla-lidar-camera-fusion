@@ -18,6 +18,7 @@ puis suivi (Kalman) et freinage d'urgence automatique (AEB) validé en boucle fe
 | 10_aeb_sweep | balayage de l'AEB sur un modèle cinématique (sans CARLA) |
 | 11_aeb_closed_loop | un essai AEB en boucle fermée dans CARLA (YOLO -> LiDAR -> tracker -> AEB -> frein) |
 | 12_aeb_campaign | campagne d'essais (vitesses x météos x graines), tableaux agrégés |
+| 13_agent_eval | évalue la conversion « demande en langage naturel -> scénario JSON » (sans CARLA) |
 
 ## Code (src/fusion/)
 `config.py` (paramètres), `geometry.py` (repères, projection), `rig.py` (capteurs CARLA, étiquettes),
@@ -146,6 +147,30 @@ ce résultat est compatible avec lui, il ne le prouve pas). Une fausse détectio
 (100 % prédit, non mesuré en CARLA). Pas de régression sur la cible arrêtée à 20 Hz (mêmes écarts minimaux et mêmes
 distances de premier freinage) ; le retard ajouté si l'obstacle apparaît à 20-25 m est d'environ 0,7 m à 50 km/h
 (modèle hors CARLA).
+
+## Agent : langage naturel -> scénario d'essai (première brique)
+Implémenté et testé hors CARLA (`src/fusion/agent/`, `scripts/13_agent_eval.py`) : schéma JSON d'un scénario, validateur de
+plages et de faisabilité (route droite disponible par carte : 95 m à Town10HD_Opt, 80 m à Town03), conversion vers les
+requêtes de l'API du Studio (`/api/runs`, `/api/campaigns`), jeu de 35 demandes avec réponse de référence
+(`reference/agent_benchmark.jsonl`, en français et en anglais, dont 7 à refuser : infaisables ou trop vagues), métriques
+avec regroupement des erreurs, baseline sans LLM par règles, client pour API « compatibles OpenAI » (Groq, OpenRouter,
+Ollama, Gemini).
+
+| Convertisseur | Cas corrects sur 35 |
+|---|---|
+| Règles (mots-clés, sans LLM) | 23 (reproductible) |
+| `openai/gpt-oss-120b` via Groq, température 0, prompt v1 | 33, puis 32 (deux passages) |
+| idem, prompt v2 | 34 (un passage), puis 33, 33, 32 (moyenne 32,7) |
+
+Ce que les mesures montrent : sur les scénarios que le modèle accepte, les champs sont exacts (aucune erreur d'unité ni de
+valeur observée) ; les échecs sont des **refus à tort** de demandes valides (4 cas, selon le prompt) et, une fois, une demande
+vague acceptée. Deux passages identiques à température 0 ne donnent pas le même score : une différence de 1 à 2 cas sur 35
+n'est donc pas une amélioration. La v2 du prompt (qui précise que la vitesse donnée est celle de l'ego) corrige deux cas que
+j'avais formulés de façon ambiguë et en casse deux de suivi : à égalité avec la v1, aucun gain démontré.
+
+Limites : le jeu de test est écrit par moi et le prompt v2 a été ajusté d'après ses erreurs ; il n'y a donc pas encore de jeu
+de validation indépendant (à construire avec des formulations d'un autre auteur). Pas de RAG, pas de LoRA, pas de boucle
+d'amélioration continue, et l'agent n'est pas branché à l'interface du Studio. Un seul modèle LLM testé.
 
 ## Reproduire
 ```

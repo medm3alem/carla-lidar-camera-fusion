@@ -1,0 +1,35 @@
+{"id": "b01", "category": "simple", "text": "Cible arrêtée devant l'ego roulant à 50 km/h.", "gold": {"scenario": "stopped", "ego_speed_kmh": 50}}
+{"id": "b02", "category": "simple", "text": "Teste l'AEB à 70 km/h face à un véhicule à l'arrêt, écart de 60 m.", "gold": {"scenario": "stopped", "ego_speed_kmh": 70, "gap_m": 60}}
+{"id": "b03", "category": "simple", "text": "Véhicule immobile, ego à 30 km/h sous la pluie.", "gold": {"scenario": "stopped", "ego_speed_kmh": 30, "weather": "rain"}}
+{"id": "b04", "category": "simple", "text": "Ego à 50 km/h, la voiture devant roule à 30 km/h et freine brusquement après 1 s.", "gold": {"scenario": "braking", "ego_speed_kmh": 50, "lead_speed_kmh": 30, "lead_brake_t_s": 1}}
+{"id": "b05", "category": "multi", "text": "Le véhicule de devant freine à 2 secondes, ego 50 km/h, cible 30 km/h, écart 40 m.", "gold": {"scenario": "braking", "ego_speed_kmh": 50, "lead_speed_kmh": 30, "lead_brake_t_s": 2, "gap_m": 40}}
+{"id": "b06", "category": "simple", "text": "Passage d'un véhicule garé dans la voie voisine à 50 km/h.", "gold": {"scenario": "adjacent", "ego_speed_kmh": 50}}
+{"id": "b07", "category": "simple", "text": "Ego à 70 km/h qui double une voiture arrêtée dans la voie d'à côté.", "gold": {"scenario": "adjacent", "ego_speed_kmh": 70}}
+{"id": "b08", "category": "simple", "text": "Suivi d'un véhicule à la même vitesse, 30 km/h, écart 15 m.", "gold": {"scenario": "follow", "ego_speed_kmh": 30, "gap_m": 15}}
+{"id": "b09", "category": "implicite", "text": "L'ego suit une cible à 50 km/h, 15 mètres derrière.", "gold": {"scenario": "follow", "ego_speed_kmh": 50, "gap_m": 15}}
+{"id": "b10", "category": "multi", "text": "Approche d'une cible lente à 30 km/h, ego à 50 km/h, écart 25 m.", "gold": {"scenario": "approach", "ego_speed_kmh": 50, "lead_speed_kmh": 30, "gap_m": 25}}
+{"id": "b11", "category": "unités", "text": "Ego à 14 m/s, cible arrêtée.", "gold": {"scenario": "stopped", "ego_speed_kmh": 50.4}}
+{"id": "b12", "category": "unités", "text": "Ego roulant à 20 m/s devant un obstacle immobile.", "gold": {"scenario": "stopped", "ego_speed_kmh": 72}}
+{"id": "b13", "category": "unités", "text": "Ego à 8 m/s, véhicule arrêté devant.", "gold": {"scenario": "stopped", "ego_speed_kmh": 28.8}}
+{"id": "b14", "category": "défauts", "text": "Cible arrêtée à 50 km/h avec 1 % de fausses détections, durée 2 images.", "gold": {"scenario": "stopped", "ego_speed_kmh": 50, "faults": {"ghost_prob": 0.01, "ghost_len": 2}}}
+{"id": "b15", "category": "défauts", "text": "Cible arrêtée à 50 km/h, 20 % de pertes de mesure.", "gold": {"scenario": "stopped", "ego_speed_kmh": 50, "faults": {"drop_prob": 0.2}}}
+{"id": "b16", "category": "défauts", "text": "Cible arrêtée à 50 km/h, bruit de distance de 0,5 m.", "gold": {"scenario": "stopped", "ego_speed_kmh": 50, "faults": {"noise_sigma": 0.5}}}
+{"id": "b17", "category": "multi", "text": "Stopped target at 50 km/h, perception at 5 Hz.", "gold": {"scenario": "stopped", "ego_speed_kmh": 50, "perception_hz": 5}}
+{"id": "b18", "category": "multi", "text": "Cible arrêtée, ego à 70 km/h, perception à 10 Hz, graines 42 et 43.", "gold": {"scenario": "stopped", "ego_speed_kmh": 70, "perception_hz": 10, "seeds": [42, 43]}}
+{"id": "b19", "category": "multi", "text": "Ego 30 km/h, cible arrêtée, brouillard, ville Town03.", "gold": {"scenario": "stopped", "ego_speed_kmh": 30, "weather": "fog", "town": "Town03"}}
+{"id": "b20", "category": "implicite", "text": "Même test sans AEB (témoin), cible arrêtée à 50 km/h.", "gold": {"scenario": "stopped", "ego_speed_kmh": 50, "aeb": false}}
+{"id": "b21", "category": "anglais", "text": "Ego drives at 50 km/h, the lead car at 30 km/h brakes hard after 1 s.", "gold": {"scenario": "braking", "ego_speed_kmh": 50, "lead_speed_kmh": 30, "lead_brake_t_s": 1}}
+{"id": "b22", "category": "anglais", "text": "Vehicle in the neighboring lane, ego at 70 km/h, 5 Hz perception.", "gold": {"scenario": "adjacent", "ego_speed_kmh": 70, "perception_hz": 5}}
+{"id": "b23", "category": "anglais", "text": "Following a car at 30 km/h with a 15 m gap.", "gold": {"scenario": "follow", "ego_speed_kmh": 30, "gap_m": 15}}
+{"id": "b24", "category": "anglais", "text": "Ego at 50 km/h approaching a slower car at 30 km/h, 25 m gap, in the rain.", "gold": {"scenario": "approach", "ego_speed_kmh": 50, "lead_speed_kmh": 30, "gap_m": 25, "weather": "rain"}}
+{"id": "b25", "category": "multi", "text": "Freinage de la cible : ego 60 km/h, cible 40 km/h, écart 40 m, freinage après 2 s, ville Town05.", "gold": {"scenario": "braking", "ego_speed_kmh": 60, "lead_speed_kmh": 40, "gap_m": 40, "lead_brake_t_s": 2, "town": "Town05"}}
+{"id": "b26", "category": "multi", "text": "Cible arrêtée sur la route, ego à 50 km/h, 3 graines : 42, 43 et 44.", "gold": {"scenario": "stopped", "ego_speed_kmh": 50, "seeds": [42, 43, 44]}}
+{"id": "b27", "category": "simple", "text": "Ego à 90 km/h, cible arrêtée.", "gold": {"scenario": "stopped", "ego_speed_kmh": 90}}
+{"id": "b28", "category": "défauts", "text": "Test de robustesse : cible arrêtée à 50 km/h avec 10 % de pertes de mesure, 0,3 m de bruit, perception 5 Hz.", "gold": {"scenario": "stopped", "ego_speed_kmh": 50, "faults": {"drop_prob": 0.1, "noise_sigma": 0.3}, "perception_hz": 5}}
+{"id": "b29", "category": "infaisable", "text": "Cible arrêtée à 50 km/h avec 90 m d'écart sur Town03.", "gold": null, "reject_reason": "infaisable"}
+{"id": "b30", "category": "infaisable", "text": "Ego à 200 km/h devant une cible arrêtée.", "gold": null, "reject_reason": "infaisable"}
+{"id": "b31", "category": "infaisable", "text": "Suivi à 50 km/h avec 70 m d'écart sur Town10.", "gold": null, "reject_reason": "infaisable"}
+{"id": "b32", "category": "infaisable", "text": "Cible arrêtée à 50 km/h sur Town99.", "gold": null, "reject_reason": "infaisable"}
+{"id": "b33", "category": "infaisable", "text": "Ego à 5 km/h, cible arrêtée.", "gold": null, "reject_reason": "infaisable"}
+{"id": "b34", "category": "ambigu", "text": "Fais un test de freinage d'urgence.", "gold": null, "reject_reason": "ambigu"}
+{"id": "b35", "category": "ambigu", "text": "Vérifie que le système de sécurité fonctionne bien.", "gold": null, "reject_reason": "ambigu"}
