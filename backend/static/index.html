@@ -72,9 +72,16 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:4px 6px;b
 <canvas id="plot" class="hide"></canvas>
 <table id="dets" style="margin-top:10px"><thead><tr><th>#</th><th>Confiance</th><th>Distance LiDAR</th><th>Points</th><th>Estimation caméra</th></tr></thead><tbody></tbody></table></section>
 
+<section class="card" style="grid-column:1/-1"><h2>Agent : demande en langage naturel <span class="muted" id="a_mode"></span></h2>
+<textarea id="a_text" rows="2" maxlength="600" style="width:100%;box-sizing:border-box" placeholder="Ex. : Une voiture à l'arrêt à 60 m, j'arrive à 50 km/h sous la pluie, essaie les graines 42 et 43"></textarea>
+<button id="a_go">Convertir</button> <button id="a_apply" disabled>Appliquer au formulaire de campagne</button> <span id="a_msg" class="muted"></span>
+<div id="a_res" class="hide" style="margin-top:8px"></div>
+<div class="muted" style="margin-top:6px;font-size:12px">Le texte est converti en scénario, rien n'est lancé : vérifier le formulaire de campagne ci-dessous, puis cliquer sur « Lancer la campagne ». Le modèle peut se tromper : relire les valeurs.</div></section>
+
 <section class="card" style="grid-column:1/-1"><h2>Campagne d'essais <span class="muted">(vitesses &times; météos &times; graines, un processus CARLA par essai, ~15 s chacun)</span></h2>
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0 12px">
 <div><label>Scénario</label><select id="c_scenario"></select></div>
+<div><label>Carte</label><select id="c_town"></select></div>
 <div><label>Vitesses (km/h)</label><input id="c_speeds" value="30 50 70"></div>
 <div><label>Météos</label><input id="c_weathers" value="clear"></div>
 <div><label>Graines</label><input id="c_seeds" value="42 43"></div>
@@ -82,6 +89,10 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:4px 6px;b
 <div><label>Vitesse cible (km/h)</label><input id="c_lead" type="number" value="30" min="5" max="90"></div>
 <div><label>Fréquence perception</label><select id="c_hz"><option value="20">20 Hz</option><option value="10">10 Hz</option><option value="5">5 Hz</option></select></div>
 <div><label>Fausses détections (prob./image)</label><input id="c_ghost" type="number" value="0" min="0" max="0.2" step="0.005"></div>
+<div><label>Durée fausse détection (images)</label><input id="c_glen" type="number" value="1" min="1" max="30"></div>
+<div><label>Perte de détections (prob.)</label><input id="c_drop" type="number" value="0" min="0" max="0.9" step="0.05"></div>
+<div><label>Bruit LiDAR (&sigma; m)</label><input id="c_noise" type="number" value="0" min="0" max="2" step="0.1"></div>
+<div><label>Freinage cible à (s)</label><input id="c_bt" type="number" value="3" min="0" max="20" step="0.5"></div>
 </div>
 <label><input id="c_baseline" type="checkbox">Inclure les témoins sans AEB (double le nombre d'essais)</label>
 <label><input id="c_same" type="checkbox">Cible à la vitesse de l'ego (suivi)</label>
@@ -111,13 +122,13 @@ function needM(sc,gap,lead,bt){const vl=lead/3.6;return sc==='braking'?gap+5+vl*
 function scenDefaults(){const d=SCEN[$('scenario').value];if(!d)return;$('gap').value=d.gap;$('lead_speed').value=d.lead;$('lead_brake_t').value=d.brake_t;needHint()}
 function needHint(){const n=needM($('scenario').value,+$('gap').value,+$('lead_speed').value,+$('lead_brake_t').value);
  $('need').innerHTML=`Route droite nécessaire : environ ${n.toFixed(0)} m`+(n>95&&$('town').value==='Town10HD_Opt'?` <span class="err">(Town10HD_Opt n'a que 95 m : réduire l'écart ou changer de carte)</span>`:'')}
-function campDefaults(){const d=SCEN[$('c_scenario').value];if(!d)return;$('c_gap').value=d.gap;$('c_lead').value=d.lead;$('c_same').checked=$('c_scenario').value==='follow'}
+function campDefaults(){const d=SCEN[$('c_scenario').value];if(!d)return;$('c_gap').value=d.gap;$('c_lead').value=d.lead;$('c_bt').value=d.brake_t;$('c_same').checked=$('c_scenario').value==='follow'}
 function kindUI(){const a=$('kind').value==='aeb';$('g_aeb').classList.toggle('hide',!a);$('g_obs').classList.toggle('hide',a)}
 async function init(){const o=await api('/api/options');
  $('town').innerHTML=o.towns.map(t=>`<option>${t}</option>`).join('');$('town').value='Town10HD_Opt';
  $('weather').innerHTML=o.weathers.map(t=>`<option>${t}</option>`).join('');
  $('scenario').innerHTML=o.scenarios.map(t=>`<option>${t}</option>`).join('');
- $('c_scenario').innerHTML=o.scenarios.map(t=>`<option>${t}</option>`).join('');
+ $('c_scenario').innerHTML=o.scenarios.map(t=>`<option>${t}</option>`).join('');$('c_town').innerHTML=o.towns.map(t=>`<option>${t}</option>`).join('');$('c_town').value='Town10HD_Opt';agentInfo();
  $('kind').onchange=kindUI;kindUI();$('scenario').onchange=scenDefaults;['gap','lead_speed','lead_brake_t'].forEach(i=>$(i).oninput=needHint);$('town').onchange=needHint;$('c_scenario').onchange=campDefaults;scenDefaults();carla();setInterval(carla,5000);runs();setInterval(runs,4000)}
 function resText(x){if(x.kind!=='aeb')return x.n_detections==null?'-':`${x.n_frames} images, ${x.n_detections} détections (${x.n_with_lidar} avec LiDAR)`;
  if(x.collided==null)return '-';return (x.collided?'<span class="err">collision</span>':'sans collision')+`, écart min ${x.min_gap_m} m, état max ${x.max_state}`}
@@ -195,11 +206,32 @@ async function camps(){try{const r=await api('/api/campaigns');
  document.querySelectorAll('#c_list tr[data-cid]').forEach(tr=>tr.onclick=()=>showCamp(tr.dataset.cid));
  if(!campCur){const run=r.find(x=>x.state==='running');if(run)showCamp(run.id)}else if(r.some(x=>x.id===campCur&&x.state==='running'))showCamp(campCur)}catch{}}
 $('c_start').onclick=async()=>{$('c_msg').textContent='';
- const body={scenario:$('c_scenario').value,speeds:nums($('c_speeds').value),weathers:$('c_weathers').value.split(/[\s,;]+/).filter(Boolean),seeds:nums($('c_seeds').value),
+ const body={scenario:$('c_scenario').value,town:$('c_town').value,lead_brake_t:+$('c_bt').value,ghost_len:+$('c_glen').value,drop_prob:+$('c_drop').value,noise_sigma:+$('c_noise').value,speeds:nums($('c_speeds').value),weathers:$('c_weathers').value.split(/[\s,;]+/).filter(Boolean),seeds:nums($('c_seeds').value),
   gap:+$('c_gap').value,lead_speed:+$('c_lead').value,same_speed:$('c_same').checked,skip_baseline:!$('c_baseline').checked,perception_hz:+$('c_hz').value,ghost_prob:+$('c_ghost').value};
  try{const r=await api('/api/campaigns',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});campCur=r.id;showCamp(r.id);camps()}
  catch(e){$('c_msg').innerHTML=`<span class="err">${e.message}</span>`}};
 $('c_stop').onclick=()=>campCur&&api('/api/campaigns/'+campCur+'/stop',{method:'POST'});
+
+// ---- agent : phrase -> scénario -> formulaire de campagne (rien n'est lancé automatiquement)
+let agentSc=null;
+const esc=t=>String(t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+async function agentInfo(){try{const a=await api('/api/agent');$('a_mode').textContent=a.mode==='llm'?`— modèle ${a.model} (${a.provider})`:'— mode règles (aucune clé LLM sur le serveur : compréhension limitée aux mots-clés)'}catch{}}
+$('a_go').onclick=async()=>{agentSc=null;$('a_apply').disabled=true;$('a_msg').textContent='analyse...';$('a_go').disabled=true;const r=$('a_res');
+ try{const x=await api('/api/agent/parse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('a_text').value})});
+  $('a_msg').textContent='';r.classList.remove('hide');
+  if(!x.ok){const lab={rejet:'Demande refusée',infaisable:'Demande infaisable ici',invalide:'Scénario invalide',json_invalide:'Réponse illisible'}[x.kind]||'Refus';
+   r.innerHTML=`<span class="err"><b>${lab} :</b> ${esc(x.message)}</span><br><span class="muted">Reformuler la demande (scénario, vitesse de l'ego, écart) ou corriger les valeurs indiquées, puis cliquer à nouveau sur Convertir.</span>`;return}
+  const n=x.scenario,f=n.faults;agentSc=n;
+  const faults=[f.ghost_prob?`fausses détections ${f.ghost_prob}/image sur ${f.ghost_len} images`:'',f.drop_prob?`pertes ${f.drop_prob}`:'',f.noise_sigma?`bruit ${f.noise_sigma} m`:''].filter(Boolean).join(', ')||'aucun';
+  const warn=n.aeb===false?'<br><span class="err">« Sans AEB » demandé : une campagne du Studio lance l\'AEB (cocher « Inclure les témoins » pour avoir aussi les essais sans AEB).</span>':'';
+  r.innerHTML=`<b>${n.scenario}</b> sur ${n.town}, ego ${n.ego_speed_kmh} km/h, écart ${n.gap_m} m, cible ${n.lead_speed_kmh??'-'} km/h (freine à ${n.lead_brake_t_s} s), météo ${n.weather}, perception ${n.perception_hz} Hz, graines ${n.seeds.join(', ')}<br>Défauts : ${faults}. Route nécessaire : ${x.need_m} m.${warn}`;
+  $('a_apply').disabled=false}
+ catch(e){$('a_msg').innerHTML=`<span class="err">${esc(e.message)}</span>`}finally{$('a_go').disabled=false}};
+$('a_apply').onclick=()=>{const n=agentSc;if(!n)return;const f=n.faults;
+ $('c_scenario').value=n.scenario;$('c_town').value=n.town;$('c_speeds').value=n.ego_speed_kmh;$('c_weathers').value=n.weather;$('c_seeds').value=n.seeds.join(' ');
+ $('c_gap').value=n.gap_m;$('c_lead').value=Math.max(5,n.lead_speed_kmh||30);$('c_same').checked=n.scenario==='follow';$('c_bt').value=n.lead_brake_t_s;
+ $('c_hz').value=n.perception_hz;$('c_ghost').value=f.ghost_prob;$('c_glen').value=f.ghost_len;$('c_drop').value=f.drop_prob;$('c_noise').value=f.noise_sigma;
+ $('c_baseline').checked=n.aeb===false;$('a_msg').textContent='Formulaire rempli : vérifier puis lancer la campagne.';$('c_start').scrollIntoView({behavior:'smooth',block:'center'})};
 setInterval(camps,3000);camps();
 init();
 </script></body></html>

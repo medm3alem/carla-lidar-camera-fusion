@@ -9,6 +9,7 @@ import asyncio
 import base64
 import json
 import csv
+import os
 import socket
 import statistics
 import subprocess
@@ -22,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
 RUNS = ROOT / "runs" / "studio"
 WORKER = ROOT / "backend" / "worker.py"
 AEB_SCRIPT = ROOT / "scripts" / "11_aeb_closed_loop.py"
@@ -274,6 +276,7 @@ async def stream(ws: WebSocket, run_id: str):
 # ---------------------------------------------------------------- campagnes (scripts/12_aeb_campaign.py)
 class CampaignConfig(BaseModel):
     scenario: str = "stopped"
+    town: str = "Town10HD_Opt"
     speeds: list[float] = [30.0, 50.0, 70.0]
     weathers: list[str] = ["clear"]
     seeds: list[int] = [42, 43]
@@ -366,7 +369,7 @@ def campaign_info(cid: str) -> dict:
 
 @app.post("/api/campaigns")
 def start_campaign(cfg: CampaignConfig):
-    if (cfg.scenario not in SCENARIOS or cfg.perception_hz not in (20, 10, 5) or not cfg.speeds or not cfg.weathers
+    if (cfg.scenario not in SCENARIOS or cfg.town not in TOWNS or cfg.perception_hz not in (20, 10, 5) or not cfg.speeds or not cfg.weathers
             or not cfg.seeds or any(w not in WEATHERS for w in cfg.weathers)
             or any(not 10 <= v <= 90 for v in cfg.speeds)):
         raise HTTPException(422, "paramètre invalide")
@@ -387,7 +390,7 @@ def start_campaign(cfg: CampaignConfig):
     aeb_opts = " ".join(f"{k} {v}" for k, v, dflt in opts if v != dflt)
     if cfg.ghost_prob > 0:
         aeb_opts += f" --ghost-len {cfg.ghost_len}"
-    cmd = [sys.executable, str(CAMP_SCRIPT), "--resume", cid, "--scenario", cfg.scenario,
+    cmd = [sys.executable, str(CAMP_SCRIPT), "--resume", cid, "--scenario", cfg.scenario, "--town", cfg.town,
            "--speeds", *[str(v) for v in cfg.speeds], "--weathers", *cfg.weathers,
            "--seeds", *[str(s) for s in cfg.seeds], "--gap", str(cfg.gap), "--lead-speed", str(cfg.lead_speed),
            "--lead-brake-t", str(cfg.lead_brake_t), f"--aeb-opts={aeb_opts.strip()}"]
@@ -424,6 +427,59 @@ def stop_campaign(cid: str):
     if p is not None and p.poll() is None:
         p.terminate()             # l'essai en cours se termine tout seul ; les suivants ne sont pas lancés
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- agent : demande en langage naturel -> scénario
+class AgentRequest(BaseModel):
+    text: str = Field(..., min_length=3, max_length=600)
+
+
+def agent_model():
+    """(mode, fournisseur, modèle, fonction texte -> sortie). LLM si une clé est définie (variable d'environnement du
+    serveur LLM_API_KEY, jamais envoyée par le navigateur) ou si le fournisseur est Ollama (local) ; sinon baseline à règles.
+    Configuration : AGENT_PROVIDER (groq|openrouter|ollama|gemini), AGENT_MODEL, AGENT_BASE_URL, AGENT_PROMPT (v1|v2)."""
+    from fusion.agent.llm import BASES, make_chat
+    from fusion.agent.prompt import system_prompt
+    from fusion.agent.rules import parse_text
+    provider = os.environ.get("AGENT_PROVIDER", "groq")
+    model = os.environ.get("AGENT_MODEL", "openai/gpt-oss-120b")
+    key = os.environ.get("LLM_API_KEY")
+    if key or provider == "ollama":
+        base = os.environ.get("AGENT_BASE_URL") or BASES.get(provider)
+        if base:
+            return "llm", provider, model, make_chat(base, model, key, system_prompt(os.environ.get("AGENT_PROMPT", "v2")))
+    return "rules", "règles", "mots-clés", parse_text
+
+
+@app.get("/api/agent")
+def agent_info():
+    mode, provider, model, _ = agent_model()
+    return {"mode": mode, "provider": provider, "model": model}
+
+
+@app.post("/api/agent/parse")
+def agent_parse(req: AgentRequest):
+    """Convertit une phrase en scénario normalisé, ou explique pourquoi c'est impossible. Ne lance rien."""
+    from fusion.agent import check, need_length_m
+    from fusion.agent.metrics import parse, reject_reason
+    mode, provider, model, call = agent_model()
+    try:
+        out = call(req.text)
+    except Exception as e:      # noqa: BLE001 : réseau, quota, clé invalide...
+        raise HTTPException(502, f"appel du modèle impossible : {e}")
+    base = {"mode": mode, "provider": provider, "model": model, "raw": str(out)[:600]}
+    d, status = parse(out)
+    if status == "json_invalide":
+        return {**base, "ok": False, "kind": "json_invalide", "message": "réponse du modèle illisible, reformuler la demande"}
+    if status == "rejet":
+        reason = reject_reason(out) or "demande non comprise (scénario ou vitesse de l'ego non reconnus)"
+        return {**base, "ok": False, "kind": "rejet", "message": reason}
+    n, fmt, infeasible = check(d)
+    if fmt:
+        return {**base, "ok": False, "kind": "invalide", "message": "; ".join(fmt)}
+    if infeasible:
+        return {**base, "ok": False, "kind": "infaisable", "message": "; ".join(infeasible), "scenario": n}
+    return {**base, "ok": True, "scenario": n, "need_m": round(need_length_m(n))}
 
 
 app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")

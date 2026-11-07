@@ -144,3 +144,40 @@ def test_client_openai_erreur_http_remontee():
 def test_parse_ignore_les_blocs_de_raisonnement():
     d, st = parse('<think>{"scenario": "braking"}</think>{"scenario": "stopped", "ego_speed_kmh": 50}')
     assert st == "ok" and d["scenario"] == "stopped"
+
+
+# ---------------------------------------------------------------- jeu B (écrit après le gel du prompt) et prompt partagé
+BENCH_B = Path(__file__).resolve().parents[1] / "reference" / "agent_benchmark_b.jsonl"
+
+
+def _bench_b():
+    return [json.loads(l) for l in BENCH_B.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def test_jeu_b_references_valides():
+    items = _bench_b()
+    assert len(items) == 26 and len({i["id"] for i in items}) == 26
+    for it in items:
+        if it["gold"] is None:
+            assert it["reject_reason"] in ("infaisable", "ambigu")
+        else:
+            n, fmt, inf = check(it["gold"])
+            assert not fmt and not inf, it["id"]
+
+
+def test_jeu_b_refus_detectables_par_le_validateur():
+    by = {i["id"]: i for i in _bench_b()}
+    for k in ("c13", "c16", "c25", "c26"):
+        assert by[k]["gold"] is None
+
+
+def test_prompt_partage_et_longueurs():
+    from fusion.agent.prompt import system_prompt
+    assert len(system_prompt("v1")) == 886 and len(system_prompt("v2")) == 1300
+
+
+def test_raison_du_refus():
+    from fusion.agent.metrics import reject_reason
+    assert reject_reason('{"reject": "Town07 non gérée"}') == "Town07 non gérée"
+    assert reject_reason({"reject": "x"}) == "x" and reject_reason('{"scenario": "stopped"}') is None
+    assert reject_reason("n'importe quoi") is None

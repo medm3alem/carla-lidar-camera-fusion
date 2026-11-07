@@ -37,6 +37,19 @@ def parse(output):
     return (None, "rejet") if isinstance(d, dict) and d.get("reject") else (d, "ok")
 
 
+def reject_reason(output):
+    """Raison d'un refus ({"reject": "..."}) ou None si la sortie n'est pas un refus."""
+    if isinstance(output, dict):
+        return str(output["reject"]) if output.get("reject") else None
+    txt = re.sub(r"<think>.*?</think>", "", str(output), flags=re.S)
+    i, j = txt.find("{"), txt.rfind("}")
+    try:
+        d = json.loads(txt[i:j + 1])
+    except ValueError:
+        return None
+    return str(d["reject"]) if isinstance(d, dict) and d.get("reject") else None
+
+
 def classify(item, output):
     """Retourne (correct: bool, causes: list[str]). Une cause = une catégorie d'erreur, pour le regroupement."""
     d, status = parse(output)

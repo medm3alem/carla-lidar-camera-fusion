@@ -183,3 +183,76 @@ def test_suivi_d_une_campagne(client, monkeypatch, tmp_path):
     assert client.get("/api/campaigns").json()[0]["id"] == "c1"
     assert client.get("/api/campaigns/inconnue").status_code == 404
 
+
+
+# ---------------------------------------------------------------- agent (langage naturel -> scénario)
+def fake_llm(reply, monkeypatch):
+    monkeypatch.setattr(m, "agent_model", lambda: ("llm", "test", "faux-modele", lambda text: reply))
+
+
+GOOD = {"scenario": "stopped", "ego_speed_kmh": 50, "gap_m": 50, "weather": "clear", "seeds": [42, 43]}
+
+
+def test_agent_mode_regles_sans_cle(client, monkeypatch):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.setenv("AGENT_PROVIDER", "groq")
+    assert client.get("/api/agent").json()["mode"] == "rules"
+
+
+def test_agent_scenario_valide(client, monkeypatch):
+    fake_llm(json.dumps(GOOD), monkeypatch)
+    x = client.post("/api/agent/parse", json={"text": "voiture arrêtée à 50 m, ego à 50"}).json()
+    assert x["ok"] and x["scenario"]["scenario"] == "stopped" and x["scenario"]["seeds"] == [42, 43]
+    assert x["need_m"] == 80 and x["mode"] == "llm"
+
+
+def test_agent_refus_avec_raison(client, monkeypatch):
+    fake_llm('{"reject": "Town07 n\'est pas gérée"}', monkeypatch)
+    x = client.post("/api/agent/parse", json={"text": "test sur Town07"}).json()
+    assert not x["ok"] and x["kind"] == "rejet" and "Town07" in x["message"]
+
+
+def test_agent_json_illisible(client, monkeypatch):
+    fake_llm("désolé, je ne sais pas", monkeypatch)
+    x = client.post("/api/agent/parse", json={"text": "bonjour"}).json()
+    assert not x["ok"] and x["kind"] == "json_invalide"
+
+
+def test_agent_hors_plage_et_infaisable(client, monkeypatch):
+    fake_llm(json.dumps({**GOOD, "ego_speed_kmh": 150}), monkeypatch)
+    x = client.post("/api/agent/parse", json={"text": "ego à 150"}).json()
+    assert not x["ok"] and x["kind"] == "invalide"
+    fake_llm(json.dumps({**GOOD, "gap_m": 80, "town": "Town10HD_Opt"}), monkeypatch)       # 80 + 30 = 110 m > 95 m
+    x = client.post("/api/agent/parse", json={"text": "écart 80 m"}).json()
+    assert not x["ok"] and x["kind"] == "infaisable" and "95" in x["message"]
+
+
+def test_agent_erreur_reseau_et_aucun_lancement(client, monkeypatch):
+    def boom(text):
+        raise RuntimeError("quota dépassé")
+    monkeypatch.setattr(m, "agent_model", lambda: ("llm", "test", "x", boom))
+    monkeypatch.setattr(m.subprocess, "Popen", lambda *a, **k: pytest.fail("l'agent ne doit rien lancer"))
+    r = client.post("/api/agent/parse", json={"text": "voiture arrêtée"})
+    assert r.status_code == 502 and "quota" in r.json()["detail"]
+
+
+def test_agent_regles_comprennent_une_phrase_simple(client, monkeypatch):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    x = client.post("/api/agent/parse", json={"text": "Voiture arrêtée à 50 m, ego à 50 km/h"}).json()
+    assert x["mode"] == "rules" and x["ok"] and x["scenario"]["gap_m"] == 50
+
+
+def test_campagne_avec_carte_et_defauts(client, monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeProc:
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(m.subprocess, "Popen", lambda cmd, **k: captured.update(cmd=cmd) or FakeProc())
+    monkeypatch.setattr(m, "CAMPAIGNS", tmp_path)
+    monkeypatch.setattr(m, "camp_procs", {})
+    monkeypatch.setattr(m, "carla_status", lambda: {"reachable": True})
+    assert client.post("/api/campaigns", json={"town": "Mars"}).status_code == 422
+    r = client.post("/api/campaigns", json={"town": "Town03", "gap": 30, "speeds": [50], "seeds": [42]})
+    assert r.status_code == 200 and captured["cmd"][captured["cmd"].index("--town") + 1] == "Town03"
