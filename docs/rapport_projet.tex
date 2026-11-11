@@ -1,0 +1,753 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[french]{babel}
+\providecommand{\og}{\guillemotleft\nobreakspace}
+\AtBeginDocument{\renewcommand{\contentsname}{Table des mati\`eres}\renewcommand{\abstractname}{R\'esum\'e}\renewcommand{\figurename}{Figure}}
+\providecommand{\fg}{\nobreakspace\guillemotright}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs,longtable,array,tabularx,multirow}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,calc,fit}
+\usepackage{listings}
+\usepackage[most]{tcolorbox}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{float}
+
+\definecolor{accent}{RGB}{20,80,140}
+\definecolor{okc}{RGB}{30,120,60}
+\definecolor{warnc}{RGB}{170,90,0}
+\definecolor{badc}{RGB}{160,30,30}
+\definecolor{grayc}{RGB}{90,90,90}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=accent,citecolor=accent,
+  pdftitle={Rapport technique -- LiDAR-camera fusion, AEB, ADAS Validation Studio et agent LLM},
+  pdfauthor={Mohamed Eladeb}}
+
+\setlist{itemsep=2pt,topsep=4pt}
+\setlength{\parindent}{0pt}
+\setlength{\emergencystretch}{3em}
+\setlength{\parskip}{5pt}
+\renewcommand{\arraystretch}{1.15}
+\pagestyle{fancy}\fancyhf{}
+\fancyhead[L]{\small Fusion LiDAR--cam\'era, AEB et agent LLM sous CARLA}
+\fancyhead[R]{\small Rapport technique}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+\lstset{basicstyle=\ttfamily\footnotesize,breaklines=true,columns=fullflexible,frame=single,
+  rulecolor=\color{grayc},backgroundcolor=\color{black!3},keepspaces=true,upquote=true,
+  literate={é}{{\'e}}1 {è}{{\`e}}1 {à}{{\`a}}1 {ê}{{\^e}}1 {ç}{{\c c}}1 {ô}{{\^o}}1 {û}{{\^u}}1 {ï}{{\"i}}1 {î}{{\^i}}1 {É}{{\'E}}1 {→}{{$\rightarrow$}}1}
+
+% Statuts (distinction exigée dans tout le projet)
+\newcommand{\impl}{\textcolor{warnc}{\textbf{impl\'ement\'e}}}
+\newcommand{\teste}{\textcolor{accent}{\textbf{test\'e}}}
+\newcommand{\valide}{\textcolor{okc}{\textbf{valid\'e en simulation}}}
+\newcommand{\plan}{\textcolor{badc}{\textbf{planifi\'e}}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\newtcolorbox{honnete}[1][Lecture honn\^ete]{colback=accent!5,colframe=accent,fonttitle=\bfseries\small,title=#1,boxrule=0.5pt,left=4pt,right=4pt,top=2pt,bottom=2pt}
+\newtcolorbox{limite}[1][Limite]{colback=badc!5,colframe=badc,fonttitle=\bfseries\small,title=#1,boxrule=0.5pt,left=4pt,right=4pt,top=2pt,bottom=2pt}
+\newtcolorbox{choix}[1]{colback=okc!5,colframe=okc,fonttitle=\bfseries\small,title={Choix : #1},boxrule=0.5pt,left=4pt,right=4pt,top=2pt,bottom=2pt}
+
+\title{\Large\bfseries Rapport technique d\'etaill\'e\\[4pt]
+\large Fusion tardive LiDAR--cam\'era, freinage d'urgence automatique (AEB) valid\'e en boucle ferm\'ee,\\
+\emph{ADAS Validation Studio} et agent LLM de g\'en\'eration de sc\'enarios d'essai\\[4pt]
+\normalsize Projet personnel sous CARLA 0.9.16}
+\author{Mohamed Eladeb (ENSTA Paris, 3A parcours robotique)}
+\date{7 novembre 2026}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\begin{abstract}
+Ce document d\'ecrit l'ensemble du projet \code{carla-lidar-camera-fusion} : la cha\^ine de perception
+(collecte synchronis\'ee, \'etiquetage automatique, d\'etecteur YOLO fine-tun\'e, estimation de distance par LiDAR),
+le suivi de cibles par filtre de Kalman, le freinage d'urgence automatique valid\'e en boucle ferm\'ee dans CARLA,
+l'interface web \emph{ADAS Validation Studio} (API FastAPI, campagnes d'essais) et l'agent qui convertit une demande
+en langage naturel en sc\'enario JSON ex\'ecutable. Pour chaque brique sont donn\'es : le but, la m\'ethode, les choix
+de conception et leur justification, les r\'esultats mesur\'es, les erreurs rencontr\'ees et corrig\'ees, et surtout
+\emph{ce qui n'est pas d\'emontr\'e}. Le rapport distingue partout ce qui est \impl, \teste, \valide{} ou \plan.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%=====================================================================
+\section{Contexte, objectifs et r\`egles de travail}
+%=====================================================================
+\subsection{Objectif du projet}
+Le projet est un travail personnel men\'e pour se rapprocher du domaine automobile embarqu\'e (ADAS, perception,
+validation). Il est parti d'une question de perception --- \emph{que gagne-t-on \`a fusionner un LiDAR et une cam\'era ?}
+--- puis a \'et\'e \'etendu en trois \'etapes successives, chacune construite sur la pr\'ec\'edente :
+\begin{enumerate}
+\item une cha\^ine de perception caméra + LiDAR (d\'etection, distance, rejet de fausses alarmes) ;
+\item un AEB fond\'e sur cette perception, \'evalu\'e en boucle ferm\'ee dans le simulateur CARLA ;
+\item une application web (\emph{ADAS Validation Studio}) pour lancer et analyser des essais et des campagnes, et un agent LLM qui
+      traduit une demande textuelle (\og voiture \`a l'arr\^et \`a 50~m, j'arrive \`a 70~km/h \fg) en sc\'enario valide.
+\end{enumerate}
+
+\subsection{R\`egles de m\'ethode (cahier des charges de conduite du projet)}
+Ces r\`egles ont guid\'e chaque d\'ecision et expliquent le ton prudent du rapport :
+\begin{itemize}
+\item \textbf{V\'erifier avant de supposer} : lire le code et les sorties r\'eelles plut\^ot que d'affirmer de m\'emoire.
+\item \textbf{Ne jamais inventer de r\'esultat} : tout chiffre cit\'e provient d'une sortie de commande ou d'un fichier de \code{reference/}.
+\item \textbf{Distinguer} \impl{} (le code existe), \teste{} (des tests automatiques passent), \valide{} (mesur\'e dans CARLA dans des
+      conditions pr\'ecis\'ees) et \plan{} (pas encore fait).
+\item \textbf{Expliquer les cons\'equences} d'un choix (ce qu'il am\'eliore, ce qu'il d\'egrade).
+\item \textbf{Dire les limites d'acc\`es} : l'assistant n'a pas de terminal sur la machine ; les commandes sont lanc\'ees par l'auteur,
+      qui colle les sorties, et fait lui-m\^eme les \emph{commits} Git.
+\end{itemize}
+
+\subsection{Environnement}
+\begin{tabularx}{\textwidth}{lX}\toprule
+Syst\`eme & Windows ; GPU NVIDIA RTX 4050 (6~Go) \\
+Simulateur & CARLA 0.9.16 (mode synchrone, pas de 0,05~s = 20~Hz), serveur local \code{localhost:2000} \\
+Python & 3.12, environnement virtuel \code{venv} ; \code{torch 2.11.0+cu128}, \code{ultralytics 8.4.155}, NumPy, OpenCV \\
+Application & FastAPI + Uvicorn ; page HTML/JavaScript sans framework (le choix React/TypeScript initialement envisag\'e est report\'e) \\
+Tests & \code{pytest}, sans CARLA \\
+D\'epôt & \code{C:\textbackslash Projets\textbackslash carla-lidar-camera-fusion} (Git ; donn\'ees \code{data/} et \code{runs/} non versionn\'ees) \\
+\bottomrule\end{tabularx}
+
+%=====================================================================
+\section{Vue d'ensemble et structure du projet}
+%=====================================================================
+\subsection{Cha\^ine de traitement}
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{\begin{tikzpicture}[node distance=7mm and 6mm,
+  box/.style={draw=accent,rounded corners,fill=accent!6,minimum height=9mm,minimum width=22mm,align=center,font=\footnotesize},
+  arr/.style={-{Stealth[length=2mm]},thick,accent}]
+\node[box] (cam) {Cam\'era RGB\\800$\times$600, FOV 90$^\circ$};
+
+\node[box,right=14mm of cam] (yolo) {YOLO26n\\fine-tun\'e\\(1 classe)};
+\node[box,right=of yolo] (fus) {Fusion tardive\\distance LiDAR\\dans la bo\^ite};
+\node[box,above=of fus] (lid) {LiDAR 64 voies\\1,2\,M pts/s, 70~m};
+\node[box,right=of fus] (trk) {Tracker\\Kalman\\(x, y, v, a)};
+\node[box,right=of trk] (aeb) {AEB\\machine d'\'etats\\$a_{req}$};
+\node[box,right=of aeb] (veh) {Frein\\de l'ego};
+\draw[arr] (cam)--(yolo); \draw[arr] (yolo)--(fus); \draw[arr] (fus)--(trk); \draw[arr] (trk)--(aeb); \draw[arr] (aeb)--(veh);
+\draw[arr] (lid.south) -- (fus.north);
+\draw[arr,dashed,grayc] (veh.south) -- ++(0,-.9) -| node[pos=.25,below,font=\scriptsize,text=grayc]{boucle ferm\'ee (CARLA, 20~Hz)} (cam.south);
+\end{tikzpicture}}
+\caption{Cha\^ine de perception et de d\'ecision. En boucle ferm\'ee, le frein appliqu\'e change ce que les capteurs voient \`a l'image suivante.}
+\end{figure}
+
+\subsection{Arborescence}
+\begin{lstlisting}
+carla-lidar-camera-fusion/
+  config / requirements.txt, README.md
+  scripts/        00_rig_test ... 13_agent_eval        (une etape = un script)
+  src/fusion/
+    config.py      parametres du banc (capteurs, episodes, split)
+    geometry.py    reperes, projection camera, transformations
+    rig.py         capteurs CARLA, meteo, synchronisation, etiquetage automatique
+    perception/    fusion camera-LiDAR (sans import carla : testable hors simulation)
+    adas/          tracker de Kalman, AEB, banc cinematique, injection de defauts
+    agent/         schema JSON, validation, prompt, client LLM, regles, metriques
+  backend/
+    app/main.py    API FastAPI (runs, campagnes, agent)
+    worker.py      worker d'observation (YOLO + LiDAR) en sous-processus
+    static/index.html   interface web
+  reference/       resultats figes (CSV, jsonl, hash du modele)
+  tests/           test_aeb, test_faults, test_perception, test_fusion_lateral, test_api, test_agent
+  data/ runs/ models/  (non versionnes)
+\end{lstlisting}
+
+\subsection{Scripts, du plus ancien au plus r\'ecent}
+\begin{longtable}{@{}>{\ttfamily}p{3.6cm}p{11.4cm}@{}}\toprule
+\textrm{Script} & R\^ole \\\midrule\endhead
+00\_rig\_test & test du banc de capteurs \\
+01\_collect & collecte (\'episodes $\times$ m\'et\'eos clair/pluie/brouillard), reprise possible apr\`es arr\^et \\
+02\_view, 03\_audit & visualisation et audit du jeu de donn\'ees \\
+04\_make\_yolo & conversion au format YOLO (une classe \emph{vehicle}) \\
+05\_eval\_yolo & \'evaluation du d\'etecteur par distance et par m\'et\'eo (avant fusion) \\
+06\_train\_yolo & entra\^inement \\
+07\_leak\_check, 08\_novelty\_recall & contr\^ole de fuite train/test et recall selon la nouveaut\'e de la vue \\
+09\_fusion\_depth & fusion LiDAR : profondeur, comparaison \`a deux baselines cam\'era, rejet de fausses alarmes \\
+10\_aeb\_sweep & balayage des seuils AEB sur un mod\`ele cin\'ematique (sans CARLA) \\
+11\_aeb\_closed\_loop & un essai AEB en boucle ferm\'ee dans CARLA \\
+12\_aeb\_campaign & campagne : vitesses $\times$ m\'et\'eos $\times$ graines, tableaux agr\'eg\'es \\
+13\_agent\_eval & \'evalue la conversion langage naturel $\rightarrow$ JSON (sans CARLA) \\
+\bottomrule\end{longtable}
+
+%=====================================================================
+\section{Banc de simulation et collecte de donn\'ees}
+%=====================================================================
+\subsection{Capteurs et param\`etres}
+Les param\`etres sont centralis\'es dans \code{src/fusion/config.py} (classe immuable \code{Config}), ce qui permet de
+retrouver exactement les conditions d'une collecte.
+\begin{center}\begin{tabular}{@{}p{3.6cm}p{11.4cm}@{}}\toprule
+Param\`etre & Valeur \\\midrule
+Pas de simulation & 0,05~s (20~Hz), mode synchrone \\
+Sauvegarde & 1 image sur 4 (5~Hz) \\
+Ville de collecte & Town10HD\_Opt \\
+\'Episodes & 60, 60 images cibles chacun (12~s de conduite), 70 v\'ehicules de trafic \\
+M\'et\'eos & \code{clear} (ClearNoon), \code{rain} (HardRainNoon), \code{fog} (nuages 80, brouillard 60, distance 20~m) \\
+Cam\'era RGB & 800$\times$600, FOV 90$^\circ$, position (1,5\,; 0\,; 2,4)~m \\
+LiDAR & 64 voies, $1{,}2\cdot10^6$ pts/s, port\'ee 70~m, FOV $+5^\circ/-20^\circ$, \code{dropoff\_general\_rate}=0 \\
+\'Etiquetage & distance maximale 60~m ; visibilit\'e minimale 0,3 \\
+D\'ecoupage & par \'episode : 70\,\% entra\^inement, 15\,\% validation, 15\,\% test \\
+\bottomrule\end{tabular}\end{center}
+
+\begin{choix}{d\'ecoupage par \'episode, pas par image}
+Deux images successives d'un m\^eme \'episode sont presque identiques. Un d\'ecoupage al\'eatoire par image mettrait des quasi-doublons
+en entra\^inement et en test et gonflerait artificiellement les scores. Chaque \'episode entier est donc affect\'e \`a un seul ensemble,
+et les trois m\'et\'eos d'un m\^eme \'episode partagent les m\^emes graines (m\^emes trajectoires) pour comparer proprement les conditions.
+Avec 60 \'episodes cela donne 9 \'episodes de test (confirm\'e par les fichiers d'\'evaluation).
+\end{choix}
+
+\begin{choix}{LiDAR sans suppression de points}
+CARLA supprime 45\,\% des points par d\'efaut (\code{dropoff\_general\_rate}). Pour mesurer la fusion sans ce bruit artificiel non
+repr\'esentatif d'un capteur r\'eel particulier, le taux est mis \`a 0. Cons\'equence : le LiDAR simul\'e est plus favorable que du r\'eel,
+et il n'est pas d\'egrad\'e par la pluie ni le brouillard (voir limites).
+\end{choix}
+
+\subsection{\'Etiquetage automatique}
+\code{rig.label\_objects} produit pour chaque v\'ehicule dans le champ :
+\begin{itemize}
+\item la bo\^ite 2D serr\'ee, obtenue par la \textbf{segmentation d'instance} de CARLA (pas par projection de bo\^ites 3D, qui sur-estime les v\'ehicules partiellement cach\'es) ;
+\item la \textbf{visibilit\'e} (pixels visibles / surface de l'enveloppe projet\'ee) ; en dessous de 0,3 le v\'ehicule est marqu\'e \og ignor\'e \fg{} ;
+\item les profondeurs de r\'ef\'erence : face avant la plus proche (\code{depth\_face}) et centre ;
+\item le nombre de points LiDAR tombant sur l'instance ;
+\item le nombre de v\'ehicules dans le champ mais cach\'es (compt\'es, non \'etiquet\'es).
+\end{itemize}
+\begin{choix}{zone \og ignor\'ee \fg{} plut\^ot que faux n\'egatif}
+Un v\'ehicule presque totalement masqu\'e n'est ni un succ\`es ni un \'echec du d\'etecteur. En entra\^inement, son emplacement est gris\'e
+dans l'image (les pixels des v\'ehicules gard\'es sont restaur\'es par-dessus) pour ne pas apprendre \`a l'ignorer \`a tort ; en \'evaluation,
+une d\'etection sur un v\'ehicule ignor\'e n'est compt\'ee ni comme r\'eussite ni comme fausse alarme (voir \code{05\_eval\_yolo.py}).
+\end{choix}
+
+\subsection{Contr\^oles de qualit\'e du jeu de donn\'ees}
+\begin{itemize}
+\item \code{03\_audit} : audit g\'en\'eral du jeu de donn\'ees ;
+\item \code{07\_leak\_check} : pour chaque image de test, distance \`a l'image d'entra\^inement la plus proche de m\^eme cap ($\pm30^\circ$) ;
+\item \code{08\_novelty\_recall} : recall du d\'etecteur selon cette distance (familier $<5$~m, interm\'ediaire, nouveau $\geq20$~m).
+\end{itemize}
+Ces scripts existent et ont \'et\'e utilis\'es, mais leurs sorties chiffr\'ees ne sont pas rejou\'ees dans ce rapport : elles n'ont pas \'et\'e
+conserv\'ees dans \code{reference/}. Je ne cite donc pas de pourcentage de fuite.
+
+%=====================================================================
+\section{D\'etecteur YOLO}
+%=====================================================================
+\subsection{Choix et entra\^inement}
+\begin{itemize}
+\item Mod\`ele de d\'epart : \code{yolo26n.pt} (le plus petit, adapt\'e \`a un GPU de 6~Go et \`a une inf\'erence en boucle ferm\'ee \`a 20~Hz).
+\item Une seule classe \emph{vehicle} : la perception sert \`a la distance d'un obstacle, pas \`a la cat\'egorie.
+\item Param\`etres (\code{reference/train\_v4\_n\_args.yaml}) : 40 \'epoques maximum, patience 10, lot de 8, images 800 px, optimiseur automatique,
+      mosa\"ique, retournement horizontal, HSV, graine 0, d\'eterministe.
+\item L'entra\^inement s'est arr\^et\'e \`a l'\'epoque 38 (patience), meilleur mod\`ele \`a l'\'epoque 28, soit environ 76~min.
+\end{itemize}
+Meilleure \'epoque sur la validation : mAP50 = 0,948 ; mAP50--95 = 0,771 ; pr\'ecision 0,908 ; recall 0,900.
+L'empreinte SHA-256 du fichier de poids est conserv\'ee dans \code{reference/best\_pt.sha256} pour retrouver exactement le mod\`ele utilis\'e.
+
+\subsection{R\'esultats sur le jeu de test (recall par distance et m\'et\'eo)}
+Recall = part des v\'ehicules \'etiquet\'es (non ignor\'es) retrouv\'es par une d\'etection, par tranche de distance. Les chiffres ci-dessous
+sont recalcul\'es depuis les CSV de \code{reference/}.
+\begin{center}\small\begin{tabular}{@{}llccc@{}}\toprule
+Mod\`ele, ville & M\'et\'eo & 0--20 m & 20--40 m & 40--60 m \\\midrule
+YOLO26n pr\'e-entra\^in\'e (COCO)$^{*}$, Town10 & clair & 99,6\,\% & 91,9\,\% & 69,7\,\% \\
+ & pluie & 98,5\,\% & 78,5\,\% & 44,0\,\% \\
+ & brouillard & 96,4\,\% & 48,2\,\% & 3,4\,\% \\\midrule
+Fine-tun\'e, Town10 (4\,451 objets, 9 \'ep.) & clair & 100\,\% & 98,8\,\% & 89,3\,\% \\
+ & pluie & 100\,\% & 99,0\,\% & 85,5\,\% \\
+ & brouillard & 100\,\% & 99,0\,\% & 89,7\,\% \\\midrule
+Pr\'e-entra\^in\'e (COCO), Town03 (3\,393 objets, 10 \'ep.) & clair & 98,2\,\% & 87,3\,\% & 76,4\,\% \\
+ & pluie & 97,2\,\% & 74,3\,\% & 60,3\,\% \\
+ & brouillard & 97,5\,\% & 62,0\,\% & 6,9\,\% \\\midrule
+Fine-tun\'e, Town03 & clair & 100\,\% & 96,8\,\% & 86,7\,\% \\
+ & pluie & 100\,\% & 95,9\,\% & 82,0\,\% \\
+ & brouillard & 100\,\% & 95,5\,\% & 89,7\,\% \\
+\bottomrule\end{tabular}\end{center}
+{\footnotesize $^{*}$ d'apr\`es le nom du fichier (\code{eval\_yolo26n\_test.csv}) et l'usage document\'e de \code{05\_eval\_yolo.py --coco} ; classes COCO voiture, bus, camion.}
+
+\begin{honnete}
+Le fine-tuning r\'esout surtout le brouillard \`a moyenne et longue distance (de 3,4\,\% \`a 89,7\,\% \`a 40--60~m). Mais le d\'etecteur est
+entra\^in\'e sur \emph{CARLA} Town10 : ces scores mesurent un d\'etecteur de rendu synth\'etique sur des mod\`eles de v\'ehicules
+identiques \`a l'entra\^inement, pas une performance sur des images r\'eelles. Town03 est une seconde ville, mais l'absence de fuite
+d'entra\^inement sur ses donn\'ees reste \`a confirmer d'apr\`es l'organisation des dossiers (\code{data\textbackslash v4\_town03}) avant toute revendication.
+\end{honnete}
+
+%=====================================================================
+\section{Fusion LiDAR--cam\'era : distance et rejet de fausses alarmes}
+%=====================================================================
+\subsection{M\'ethode (fusion tardive)}
+La fusion est \textbf{tardive} (au niveau des objets d\'etect\'es) : le d\'etecteur 2D produit des bo\^ites, puis le LiDAR fournit la distance.
+\begin{enumerate}
+\item Les points LiDAR sont transform\'es dans le rep\`ere cam\'era, puis projet\'es dans l'image (\code{project\_lidar}).
+\item Les points du \textbf{sol} sont retir\'es : seuls ceux situ\'es \`a plus de 0,30~m au-dessus du sol (\code{GROUND\_MARGIN}) sont gard\'es.
+\item On ne garde que les points dans la \textbf{zone centrale} de la bo\^ite (60\,\% de sa largeur et de sa hauteur, \code{INNER}).
+\item La distance est celle du \textbf{premier groupe} de profondeur (le plus proche) : c'est la face avant de l'obstacle, ce qui compte pour freiner.
+\item Sans point LiDAR : pas de mesure (utile pour le rejet, et pour l'AEB : \emph{pas de profondeur = pas de piste}).
+\end{enumerate}
+\begin{choix}{fusion tardive}
+Elle exploite un d\'etecteur 2D standard, garde chaque capteur diagnostiquable s\'epar\'ement (on peut mesurer ce que chacun apporte) et co\^ute
+peu de calcul. Une fusion pr\'ecoce (nuage de points color\'e) ou au niveau des caract\'eristiques demanderait un r\'eseau d\'edi\'e : hors de port\'ee du GPU
+et du temps disponibles, et plus difficile \`a valider en boucle ferm\'ee.
+\end{choix}
+\begin{choix}{premier groupe plut\^ot que m\'ediane}
+La m\'ediane des points de la bo\^ite m\'elange l'obstacle et l'arri\`ere-plan visible entre les roues ou au-dessus du toit. Le premier groupe
+donne la face avant, qui est la distance de freinage pertinente.
+\end{choix}
+
+\subsection{Comparaison \`a deux estimations cam\'era seule}
+R\'ef\'erence : face avant du v\'ehicule (\'etiquette CARLA). Erreur = estim\'e $-$ r\'ef\'erence. Deux baselines cam\'era : (i) \textbf{plan du sol}
+(la distance se d\'eduit du bas de la bo\^ite, \code{ground\_depth} $=f_y\,h_{cam}/(y_{bas}-v_0)$) ; (ii) \textbf{hauteur fixe} 1,5~m.
+Town10HD\_Opt : 4\,256 d\'etections justes ; Town03 : 3\,172.
+\begin{center}\small\begin{tabular}{@{}lccc@{}}\toprule
+Ville, distance & LiDAR : MAE (part $<1$~m) & Plan du sol : MAE (part $<1$~m) & Hauteur fixe 1,5~m \\\midrule
+Town10, 0--20 m & 0,83 (74\,\%) & 1,01 (73\,\%) & 0,90 (69\,\%) \\
+Town10, 20--40 m & 1,20 (75\,\%) & 0,99 (57\,\%) & 3,36 (31\,\%) \\
+Town10, 40--60 m & 1,67 (78\,\%) & 1,29 (50\,\%) & 6,27 (13\,\%) \\
+Town03, 0--20 m & 0,71 (77\,\%) & 0,98 (73\,\%) & 0,77 (73\,\%) \\
+Town03, 20--40 m & 1,10 (81\,\%) & 2,32 (59\,\%) & 3,46 (21\,\%) \\
+Town03, 40--60 m & 0,68 (93\,\%) & 7,10 (33\,\%) & 5,43 (12\,\%) \\
+\bottomrule\end{tabular}\end{center}
+
+\begin{honnete}
+Le LiDAR n'est \emph{pas} plus pr\'ecis en moyenne partout : \`a Town10, le plan du sol a une MAE plus faible \`a 20--60~m (1,0 et 1,3~m contre 1,2 et 1,7~m),
+mais seulement 50--57\,\% des d\'etections \`a moins de 1~m contre 75--78\,\%. \`A Town03, le plan du sol se d\'egrade nettement (MAE de 7,1~m \`a 40--60~m ;
+cause non v\'erifi\'ee, probablement la pente de la route qui viole l'hypoth\`ese de route plane). Le LiDAR reste stable d'une ville \`a l'autre
+(MAE de 0,7 \`a 1,7~m, couverture de 99 \`a 100\,\%, biais m\'edian de +0,2 \`a +0,6~m, corrig\'e du pare-chocs dans l'AEB). La hauteur fixe est mauvaise au-del\`a de 20~m.
+\textbf{Il ne faut donc pas affirmer que le LiDAR bat la baseline plan-du-sol en pr\'ecision \`a Town10} ; l'avantage est la robustesse (d'une ville \`a l'autre,
+et part de d\'etections $<1$~m).
+\end{honnete}
+
+\subsection{Rejet des d\'etections sans preuve LiDAR}
+Une d\'etection n'est conserv\'ee que si au moins $N$ points LiDAR tombent dans sa bo\^ite.
+\begin{center}\small\begin{tabular}{@{}lcccc@{}}\toprule
+ & \multicolumn{2}{c}{Town10} & \multicolumn{2}{c}{Town03} \\
+ & pr\'ecision & recall & pr\'ecision & recall \\\midrule
+Sans rejet & 92,1\,\% & 95,6\,\% & 86,9\,\% & 93,5\,\% \\
+$N=3$ & 92,6\,\% & 95,5\,\% & 90,2\,\% & 92,9\,\% \\
+$N=10$ & 94,6\,\% & 86,1\,\% & 94,0\,\% & 79,1\,\% \\
+\bottomrule\end{tabular}\end{center}
+Le rejet \`a $N=3$ retire 7\,\% des fausses alarmes \`a Town10 et 28\,\% \`a Town03. L'effet est modeste ; $N=10$ co\^ute trop de recall.
+Ces fausses alarmes sont celles du d\'etecteur sur des images CARLA, pas une mesure sur du trafic r\'eel. Le seuil retenu pour l'AEB exige simplement une
+mesure LiDAR (le tracker n'accepte pas de d\'etection sans profondeur).
+
+\subsection{Mesure lat\'erale}
+Pour d\'ecider si une cible est dans le couloir de trajectoire, on a besoin de sa position lat\'erale. Elle est calcul\'ee \`a partir des points LiDAR
+(option \code{--lateral-source lidar}, d\'efaut) plut\^ot qu'\`a partir du centre de la bo\^ite cam\'era. \teste, mais cette mesure \emph{n'a pas r\'esolu seule}
+le freinage parasite \`a 5~Hz (voir section~\ref{sec:bug5hz}).
+
+%=====================================================================
+\section{Suivi de cibles (filtre de Kalman)}
+%=====================================================================
+Le tracker travaille dans le rep\`ere du v\'ehicule ($x$ devant, $y$ lat\'eral, droite positive). Les vitesses sont \textbf{relatives} \`a l'ego :
+un objet immobile devant un ego \`a 14~m/s a $v_x=-14$~m/s.
+\begin{itemize}
+\item \textbf{Mod\`ele \code{cv}} : \'etat $(x,y,v_x,v_y)$, vitesse constante (r\'ef\'erence historique).
+\item \textbf{Mod\`ele \code{ca}} (d\'efaut) : \'etat $(x,y,v_x,v_y,a_x,a_y)$, acc\'el\'eration constante avec bruit de saccade (\emph{jerk}, 2~m/s$^3$ dans le script 11).
+\item Mesure : distance de la face avant par LiDAR, \'ecart-type de position 0,3~m ; association par porte ($2+25\,\Delta t$ m) ; piste confirm\'ee apr\`es plusieurs mesures ; supprim\'ee apr\`es 3 pertes cons\'ecutives.
+\item Initialisation : \'ecart-type de vitesse longitudinale 8~m/s (une piste neuve ignore le rapprochement), mais \textbf{vitesse lat\'erale 2~m/s} (voir \S\ref{sec:bug5hz}).
+\end{itemize}
+\begin{choix}{mod\`ele \`a acc\'el\'eration constante}
+Avec un mod\`ele \`a vitesse constante, une cible qui freine est vue comme \og encore rapide \fg{} pendant plusieurs images. L'acc\'el\'eration relative estim\'ee permet
+d'\emph{anticiper} l'arr\^et de la cible (voir AEB). Prix : une estimation plus bruit\'ee, donc un seuil minimal de d\'ec\'el\'eration pour ne pas r\'eagir au bruit.
+\end{choix}
+\code{Track.misses} compte les images cons\'ecutives sans mesure ; il sert \`a la garde contre les pistes en roue libre (section suivante).
+
+%=====================================================================
+\section{AEB : m\'ethode et choix de conception}
+%=====================================================================
+\subsection{Machine d'\'etats}
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{\begin{tikzpicture}[st/.style={draw=accent,rounded corners,fill=accent!6,minimum width=30mm,minimum height=9mm,font=\footnotesize,align=center},
+ arr/.style={-{Stealth[length=2mm]},thick,accent},node distance=8mm]
+\node[st] (n) {NORMAL};
+\node[st,right=of n] (w) {WARNING\\alerte seule};
+\node[st,right=of w] (p) {PARTIAL\_BRAKING\\frein 70\,\%};
+\node[st,right=of p] (e) {EMERGENCY\_BRAKING\\frein 100\,\%};
+\draw[arr] (n)--(w); \draw[arr] (w)--(p); \draw[arr] (p)--(e);
+\draw[arr,dashed,grayc] (e.south) -- ++(0,-.9) -| node[pos=.25,below,font=\scriptsize,text=grayc]{descente : hyst\'er\'esis $0{,}7$, attente 1~s, aucun obstacle proche qui ne s'\'eloigne} (n.south);
+\end{tikzpicture}}
+\caption{\'Etats de l'AEB. L'escalade exige la confirmation du niveau sur plusieurs images ; la descente est volontairement lente.}
+\end{figure}
+
+\subsection{Crit\`ere principal : la d\'ec\'el\'eration requise}
+Pour chaque cible dans le couloir ($|y|<1{,}5$~m, distance $<60$~m, rapprochement $>0{,}5$~m/s), on calcule la d\'ec\'el\'eration n\'ecessaire pour
+s'arr\^eter avant l'obstacle, latence comprise :
+\[
+ a_{req}=\frac{v_c^{2}}{2\,\bigl(x-v_c\,t_{lat}-m\bigr)},\qquad t_{lat}=0{,}4~\text{s},\; m=1~\text{m},
+\]
+infinie si le d\'enominateur est n\'egatif ou nul. $v_c$ est la vitesse de rapprochement, $x$ la distance. Niveaux : alerte si $a_{req}\ge 2{,}0$~m/s$^2$ ou
+TTC $<2{,}6$~s ; freinage partiel (frein 70\,\%) si $a_{req}\ge 3{,}0$ ; urgence (frein 100\,\%) si $a_{req}\ge 4{,}0$.
+
+\begin{choix}{$a_{req}$ plut\^ot qu'un seuil de TTC fixe}
+Un TTC fixe donne la m\^eme alerte \`a 30 et \`a 70~km/h alors que la distance d'arr\^et varie comme $v^2$ : un essai a montr\'e qu'un seuil de TTC freine trop tard
+\`a 50~km/h avec un d\'elai d'actionnement de 0,2~s. La d\'ec\'el\'eration requise tient compte de la vitesse, de la distance et de la latence. Le TTC ne sert qu'\`a l'alerte.
+\end{choix}
+\begin{choix}{seuils calibr\'es sur la voiture CARLA, pas sur une norme}
+La premi\`ere version supposait 8~m/s$^2$ de d\'ec\'el\'eration maximale. La mesure donne environ 4,1~m/s$^2$ \`a 70~km/h (frein 100\,\%) pour le v\'ehicule de test.
+Les seuils (2,0 / 3,0 / 4,0) sont des valeurs de d\'epart choisies apr\`es balayage en boucle ferm\'ee (jeu \og B \fg) ; ce ne sont pas des valeurs homologu\'ees.
+Le jeu pr\'ec\'edent est gard\'e (\code{AEBConfig.conservative()} : 1,5 / 2,5 / 3,5, frein partiel 60\,\%) ; il freine environ 0,7~s plus t\^ot \`a 50~km/h mais
+d\'eclenche \`a TTC $\approx3$~s, plus difficile \`a juger comme n\'ecessaire.
+\end{choix}
+
+\subsection{Mesures de robustesse}
+\begin{enumerate}[label=\textbf{\arabic*.}]
+\item \textbf{Confirmation} : le niveau doit \^etre demand\'e sur 2 images cons\'ecutives de l'AEB, et la piste doit persister 0,15~s
+      (4 mesures \`a 20~Hz, 3 \`a 10~Hz, 2 \`a 5~Hz) : filtre les fausses d\'etections courtes.
+\item \textbf{Hyst\'er\'esis} : un niveau n'est quitt\'e que si $a_{req}$ tombe sous $0{,}7\times$ son seuil. Sans cela, un freinage qui r\'eussit fait osciller $a_{req}$ autour du seuil,
+      le frein est rel\^ach\'e \`a 16~m d'un obstacle fixe, et il faut ensuite freiner plus fort (observ\'e en CARLA \`a 50~km/h).
+\item \textbf{Maintien} : on ne rel\^ache pas tant qu'un obstacle du couloir est \`a moins de 15~m sans s'\'eloigner ; un essai a montr\'e qu'un rel\^achement \`a 1~m/s avec un conducteur
+      qui r\'e-acc\'el\`ere ram\`ene l'ego \`a 0,5~m de l'obstacle.
+\item \textbf{Anticipation de la d\'ec\'el\'eration de la cible} (\code{--lead-decel}, activ\'ee dans le script 11 avec le tracker \code{ca}) : si l'acc\'el\'eration absolue estim\'ee de la cible est
+      $<-3$~m/s$^2$ sur 3 images, on suppose qu'elle s'arr\^ete et on calcule la d\'ec\'el\'eration pour s'arr\^eter avant son point d'arr\^et (plafond 8~m/s$^2$).
+\item \textbf{Latence tenant compte de la fr\'equence de perception} : quand la perception tourne \`a moins de 20~Hz, l'AEB ajoute environ 3 p\'eriodes de calcul \`a la latence
+      (maintien du frein + confirmation) ; c'est une hypoth\`ese de mod\`ele.
+\item \textbf{Garde contre les pistes en roue libre} (\code{escalate\_max\_misses}=2) : une piste sans mesure depuis plus de 2 images est extrapol\'ee, non observ\'ee ;
+      elle ne peut plus faire \emph{monter} le niveau, mais retient un frein d\'ej\`a engag\'e. Une tol\'erance de 0 a \'et\'e \'ecart\'ee : jusqu'\`a +9 collisions sur 40 \`a 5~Hz avec 30\,\% de pertes (banc cin\'ematique).
+\end{enumerate}
+
+%=====================================================================
+\section{Validation en boucle ferm\'ee dans CARLA}
+%=====================================================================
+\subsection{Banc de test}
+Le script \code{11\_aeb\_closed\_loop} lance un sc\'enario avec seulement l'ego et un v\'ehicule cible (\textbf{sans trafic}). \`A chaque tick de 20~Hz :
+capteurs $\rightarrow$ YOLO $\rightarrow$ LiDAR $\rightarrow$ tracker $\rightarrow$ AEB $\rightarrow$ commande de l'ego. Le conducteur et le r\'egulateur de l'ego sont \'ecrits pour l'essai.
+Sorties par run : \code{log.csv} (une ligne par tick), \code{summary.json}, images annot\'ees, \code{status.json}.
+
+\begin{center}\small\begin{tabular}{@{}lp{11cm}@{}}\toprule
+Sc\'enario & Description et attente \\\midrule
+\code{stopped} & cible \`a l'arr\^et dans la voie ; l'AEB doit \'eviter la collision \\
+\code{braking} & cible qui roule puis freine \`a $t=$ \code{--lead-brake-t} (frein 0,75 par d\'efaut) \\
+\code{adjacent} & v\'ehicule \`a l'arr\^et en voie voisine (d\'ecalage 3,5~m) : l'ego doit passer \textbf{sans freiner} \\
+\code{follow} & cible \`a vitesse constante, sans freiner : l'ego ne doit \textbf{pas} freiner \\
+\code{approach} & approche avec un r\'egulateur de distance d'un v\'ehicule plus lent : conduite normale, pas de freinage \\
+\bottomrule\end{tabular}\end{center}
+Les sc\'enarios \emph{adjacent}, \emph{follow} et \emph{approach} mesurent les \textbf{freinages parasites} ; les deux premiers mesurent l'\textbf{efficacit\'e}.
+Les campagnes (\code{12\_aeb\_campaign}) r\'ep\`etent un cas sur des vitesses, des m\'et\'eos et des graines ; \`a chaque essai un processus CARLA distinct est lanc\'e (\,$\approx15$~s).
+
+\subsection{R\'esultats, Town10HD\_Opt, 20~Hz, m\'et\'eo claire}
+\begin{center}\small\begin{tabular}{@{}p{7.3cm}p{8cm}@{}}\toprule
+Sc\'enario & R\'esultat \\\midrule
+Cible arr\^et\'ee, 30 / 50 / 70~km/h (3 graines, \'ecart de d\'epart 50~m) & 0 collision ; \'ecart minimal m\'edian 9,9 / 7,6 / 3,3~m ; TTC au premier freinage 1,8 / 2,5 / 2,4~s \\
+Idem avec le jeu conservateur & 0 collision ; 11,9 / 9,2 / 4,3~m ; TTC 2,1 / 3,2 / 2,4~s \\
+Cible qui freine (1~s apr\`es le d\'epart), 50~km/h, \'ecart 20~m (2 graines) & 0 collision, \'ecart minimal 8,6~m (\emph{sans} anticipation : 2/2 collisions, impact 23~km/h) \\
+70~km/h avec plus de place (d\'epart 60~m, 3 graines) & 0 collision, \'ecart minimal m\'edian 13,2~m \\
+Cible hors couloir, suivi \`a m\^eme vitesse, approche normale & 0 freinage parasite observ\'e (alerte seule en approche \`a 20 et 18~m) \\
+\bottomrule\end{tabular}\end{center}
+\begin{honnete}
+\`A 70~km/h avec 50~m de d\'epart, la distance est d\'ej\`a inf\'erieure \`a la distance d'arr\^et : le freinage part d\`es la premi\`ere d\'etection quel que soit le seuil.
+Cette ligne ne d\'epartage donc pas les jeux de seuils. Les essais ont 2 \`a 4 graines : ils montrent un comportement, pas une distribution statistique.
+\end{honnete}
+
+\subsection{Effet de la fr\'equence de perception}
+Cible arr\^et\'ee, d\'epart 60~m, 2 graines, \'ecart minimal m\'edian :
+\begin{center}\small\begin{tabular}{@{}lccc@{}}\toprule
+Fr\'equence & 20 Hz & 10 Hz & 5 Hz \\\midrule
+50 km/h & 7,6 m (d\'epart 50 m) & 8,0 m & 5,3 m \\
+70 km/h & 13,2 m & 11,5 m & 6,5 m \\
+\bottomrule\end{tabular}\end{center}
+Sans correction de la latence suppos\'ee, \`a 5~Hz le m\^eme jeu provoquait une collision (13~km/h) sur 1 essai sur 2 \`a 50~km/h. Les effets de cette correction sont valid\'es sur la cible arr\^et\'ee
+seulement, pas sur les sc\'enarios non dangereux \`a 5 et 10~Hz.
+
+\subsection{Seconde ville : Town03}
+Mêmes scripts et r\'eglages, 2 graines (42 et 43), CARLA lanc\'e \textbf{sans} l'option \code{-quality-level=Low}.
+\begin{limite}[Cause non \'elucid\'ee]
+Avec \code{-quality-level=Low}, le chargement de Town03 plante (\og Shader compilation failures are Fatal \fg). Le rendu par d\'efaut d\'eplace les \'ecarts \`a 50~km/h de moins d'un m\`etre :
+le t\'emoin Town10 a donc \'et\'e refait dans le m\^eme mode, et on ne m\'elange pas deux qualit\'es dans une comparaison.
+\end{limite}
+\begin{center}\small\begin{tabular}{@{}p{5.4cm}p{3.2cm}p{3cm}p{3cm}@{}}\toprule
+Sc\'enario (\'ecart 50~m sauf mention) & Town03, d\'efaut & Town10, m\^eme rendu & Town10, Low \\\midrule
+Cible arr\^et\'ee 30/50/70 : collisions & 0/2 chacun & 0/2 chacun & 0/2 chacun \\
+idem : \'ecart minimal m\'edian (m) & 9,9 / 9,6 / 3,9 & 10,2 / 8,4 / 3,3 & 9,9 / 7,7 / 3,3 \\
+Cible qui freine (m\^eme vitesse), \'ecart 20 m, 50 km/h & 0/2, 8,5 m & 0/2, 8,6 m & 0/2, 8,6 m \\
+Cible qui freine (30 km/h), \'ecart 45 m, 50 km/h & 0/2, 7,5 m (pire 6,7) & 0/2, 8,0 m & non mesur\'e \\
+Hors couloir 30/50/70, 20 et 5 Hz & 0 freinage, 0 alerte (3 graines) & non refait & 0 freinage (6 graines, 5 Hz) \\
+Suivi m\^eme vitesse (15 m), 30/50 km/h & 0/4 freinages & non refait & 0/4 \\
+\bottomrule\end{tabular}\end{center}
+Les \'ecarts entre villes sont du m\^eme ordre ($\le1{,}2$~m pour des \'ecarts de 7 \`a 10~m, avec 2 graines) : ce sont des indications, pas une diff\'erence mesur\'ee.
+
+\subsection{Un cas non \'evitable, volontairement exclu des tableaux}
+Une cible \`a 30~km/h qui s'arr\^ete en 0,5~s avec 20~m d'\'ecart initial (ego \`a 50~km/h) donne 2 collisions sur 2 (impact $\approx29$~km/h) \`a Town03 comme \`a Town10. Le journal montre que l'alerte
+arrive \`a 0,2~s, mais que l'arr\^et de la cible survient \`a 12--13~m ; la d\'ec\'el\'eration n\'ecessaire ($\approx4{,}8$~m/s$^2$, calcul approch\'e) d\'epasse celle de la voiture ($\approx4{,}1$ mesur\'ee),
+m\^eme sans latence. Un AEB ne corrige pas une situation physiquement inatteignable. Une erreur de ma part, rep\'er\'ee ici : une variante (\code{--gap 20} avec une cible \`a 30~km/h)
+avait \'et\'e propos\'ee sans validation ; elle est remplac\'ee par des variantes valid\'ees (m\^eme vitesse, \'ecart 20~m\,; cible \`a 30~km/h, \'ecart 45~m).
+
+%=====================================================================
+\section{Robustesse aux fausses d\'etections}
+%=====================================================================
+\subsection{Injection de d\'efauts}
+Le module \code{FaultInjector} permet de simuler : des fausses d\'etections dans le couloir (probabilit\'e par image, dur\'ee r\'eglable), des pertes de mesure, un bruit gaussien sur la distance.
+C'est un \textbf{test de contrainte}, pas un taux r\'ealiste : les statistiques de persistance des fausses d\'etections du d\'etecteur r\'eel ne sont pas mesur\'ees.
+
+\subsection{M\'ethode : pr\'edire puis mesurer}
+Les fr\'equences d'essais avec au moins un freinage parasite ont d'abord \'et\'e \emph{pr\'edites} par le mod\`ele hors CARLA (\code{tests/test\_faults.py}, 200 simulations), puis \emph{mesur\'ees} en boucle ferm\'ee
+(50~km/h, route d\'egag\'ee, probabilit\'e 0,10 par image, $\approx8$ \'ev\'enements par essai de 4~s, 6 graines).
+\begin{center}\small\begin{tabular}{@{}lccc@{}}\toprule
+Dur\'ee & Mod\`ele hors CARLA & CARLA, confirm. 2 mesures & CARLA, confirm. 0,15~s \\\midrule
+1 image & 14\,\% & 1/6 & 0/6 \\
+2 images & 49\,\% & 3/6 & 0/6 \\
+3 images & 98,5\,\% & 6/6 & 0/6 \\
+\bottomrule\end{tabular}\end{center}
+Avec la confirmation de 0,15~s, le mod\`ele pr\'evoit 0\,\%, 17\,\% et 20\,\% pour 1, 2 et 3 images : le r\'esultat 0/6 est \emph{compatible} avec lui, il ne le prouve pas. Une fausse d\'etection de 4 images ou plus
+freine toujours (100\,\% pr\'edit, non mesur\'e en CARLA). Co\^ut de la confirmation : environ 0,7~m de retard \`a 50~km/h si l'obstacle appara\^it \`a 20--25~m (mod\`ele hors CARLA) ; pas de r\'egression sur la cible
+arr\^et\'ee \`a 20~Hz (m\^emes \'ecarts minimaux et distances de premier freinage).
+
+\subsection{Un bug trouv\'e puis corrig\'e : freinage parasite \`a 5~Hz}\label{sec:bug5hz}
+\textbf{Sympt\^ome} : \`a 5~Hz, en passant \`a c\^ot\'e d'une cible arr\^et\'ee dans la voie voisine (50~km/h, graine 43), un freinage d'urgence parasite apparaissait dans 4 lancements sur 6.\\
+\textbf{Hypoth\`ese \'ecart\'ee} : l'erreur de mesure lat\'erale. Passer \`a une mesure lat\'erale par points LiDAR n'a pas r\'esolu le probl\`eme \`a lui seul.\\
+\textbf{Cause trouv\'ee} en rejouant le journal : une fausse piste n\'ee de deux d\'etections proches recevait une vitesse lat\'erale initiale d'environ $-5$~m/s (a priori trop large de 8~m/s) et d\'erivait dans le couloir pendant 3 images.\\
+\textbf{Correction} : \`a l'initialisation, \'ecart-type de la vitesse lat\'erale ramen\'e \`a 2~m/s (\code{vy\_init\_std}). Test de non-r\'egression \code{test\_depassement\_a\_5hz\_ne\_declenche\_pas\_le\_freinage}.\\
+\textbf{Validation} : 0 freinage sur 8 lancements de la graine 43, et 0/18 sur les graines 42 \`a 47 \`a 30 / 50 / 70~km/h.\\
+\textbf{Garde ajout\'ee ensuite} (\code{escalate\_max\_misses}=2) : neutralise la s\'equence rejou\'ee m\^eme avec l'ancien a priori. Revalid\'ee en CARLA : cible arr\^et\'ee et v\'ehicule qui freine inchang\'es, 0/9 freinage hors couloir \`a 5~Hz.
+
+\begin{choix}{rejouer le journal avant de modifier}
+La cause n'\'etait pas la premi\`ere hypoth\`ese. Rejouer les mesures enregistr\'ees dans le tracker a permis de voir la vitesse initiale aberrante, au lieu d'ajuster des seuils \`a l'aveugle
+(ce qui aurait masqu\'e le d\'efaut en d\'egradant l'efficacit\'e).
+\end{choix}
+
+%=====================================================================
+\section{ADAS Validation Studio (application web)}
+%=====================================================================
+\subsection{Architecture}
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{\begin{tikzpicture}[node distance=9mm and 12mm,
+  box/.style={draw=accent,rounded corners,fill=accent!6,minimum height=9mm,align=center,font=\footnotesize},
+  arr/.style={-{Stealth[length=2mm]},thick,accent}]
+\node[box] (ui) {Page web\\\code{index.html}};
+\node[box,right=of ui] (api) {API FastAPI\\\code{backend/app/main.py}};
+\node[box,right=of api] (scr) {Sous-processus\\scripts 11 / 12};
+\node[box,right=of scr] (carla) {Serveur CARLA\\\code{localhost:2000}};
+\node[box,below=of api] (llm) {Agent\\(LLM ou r\`egles)};
+\node[box,below=of scr] (fs) {\code{runs/}\\log, status, summary};
+\draw[arr] (ui)--(api); \draw[arr] (api)--(scr); \draw[arr] (scr)--(carla);
+\draw[arr] (api)--(llm); \draw[arr] (scr)--(fs); \draw[arr] (api)--(fs);
+\end{tikzpicture}}
+\caption{Le serveur ne contient pas de logique de simulation : il lance les scripts en sous-processus et lit les fichiers qu'ils \'ecrivent.}
+\end{figure}
+
+\begin{choix}{sous-processus plut\^ot que simulation dans le serveur}
+CARLA, YOLO et le GPU sont des ressources lourdes et fragiles ; un plantage de CARLA ne doit pas tuer l'API. Un processus par essai donne une isolation naturelle, un arr\^et propre (fichier \code{STOP}),
+et r\'eutilise exactement les scripts valid\'es en ligne de commande. Contrepartie : environ 15~s d'initialisation par essai, et un seul run ou une seule campagne \`a la fois (une instance CARLA, un GPU).
+\end{choix}
+
+\subsection{Fonctions}
+\begin{itemize}
+\item \textbf{Run d'observation} : trafic, YOLO + distances LiDAR en direct.
+\item \textbf{Run AEB} en boucle ferm\'ee (script 11) : vue vid\'eo en direct (images \`a 10~Hz avec petite m\'emoire tampon), \'etat de l'AEB, d\'ec\'el\'eration requise, \'ecart ; bilan et courbes \`a la fin.
+\item Options : AEB d\'esactiv\'e (t\'emoin), fr\'equence de perception 20/10/5~Hz, injection de d\'efauts.
+\item \textbf{Campagnes} (\code{POST /api/campaigns}) : vitesses $\times$ m\'et\'eos $\times$ graines, maximum 60 essais, progression, tableau agr\'eg\'e (collisions, impact moyen, \'ecart m\'edian et pire, \'ecart et TTC au premier freinage),
+      reprise sur le dossier de campagne, arr\^et.
+\item \textbf{Valeurs par d\'efaut par sc\'enario} et indication de la \textbf{route droite n\'ecessaire}, car le tron\c con droit disponible est limit\'e (95~m \`a Town10HD\_Opt, 80~m \`a Town03).
+\end{itemize}
+
+\subsection{Choix et incidents notables}
+\begin{itemize}
+\item \textbf{Longueur de route} : une erreur \og plus long tron\c con droit : 95~m, il en faut 110 \fg{} a conduit \`a calculer la route requise par sc\'enario
+      (freinage : $\text{\'ecart}+5+v_l\,t_b+v_l^2/8+10$ ; suivi/approche : $\text{\'ecart}+5+4v_l+15$ ; adjacent et arr\^et : $\text{\'ecart}+30$), \`a l'afficher dans le formulaire et \`a refuser les cas infaisables avant de lancer CARLA.
+\item \textbf{Verrous de fichiers Windows} : le navigateur lisant \code{status.json} provoquait un \code{PermissionError} lors du renommage atomique. Solution : \code{replace\_retry} (r\'eessais de quelques ms) ;
+      les \'ecritures de fichiers d'affichage sont non critiques (on saute une mise \`a jour), celles de l'\'etat final sont critiques.
+\item \textbf{Chargement de Town03} : d\'elai de \code{load\_world} port\'e \`a 180~s ; la ville pass\'ee en argument du serveur \'etait ignor\'ee, on la charge par l'API.
+\item \textbf{Test qui lan\c cait un vrai processus} : un test de refus de campagne lan\c cait une vraie campagne quand CARLA \'etait allum\'e. Il remplace d\'esormais l'\'etat de CARLA et interdit \code{Popen}.
+\end{itemize}
+
+\begin{limite}[Statut de l'interface]
+L'API des campagnes et la page sont \impl{} et \teste{} sans CARLA. Une campagne \emph{lanc\'ee depuis la page} jusqu'\`a un tableau agr\'eg\'e coh\'erent avec la ligne de commande
+(arr\^et\'ee 30/50/70, graines 42 et 43, attendu $\approx$ 10 / 7,6 / 3,3~m, 0 collision) \textbf{n'est pas encore confirm\'ee par l'auteur} : elle n'est donc pas \valide.
+\end{limite}
+
+%=====================================================================
+\section{Agent : langage naturel $\rightarrow$ sc\'enario d'essai}
+%=====================================================================
+\subsection{But et principe}
+Convertir une phrase comme \og Une voiture \`a l'arr\^et \`a 60~m, j'arrive \`a 50~km/h sous la pluie, essaie les graines 42 et 43 \fg{} en un sc\'enario JSON que le Studio sait lancer, ou la \textbf{refuser avec une raison}.
+Le LLM ne lance rien : il \'ecrit un JSON, qui est ensuite \textbf{valid\'e par du code d\'eterministe}.
+
+\subsection{Sch\'ema du sc\'enario}
+\begin{center}\small\begin{tabular}{@{}ll@{}}\toprule
+Champ & Domaine \\\midrule
+\code{scenario} & stopped, braking, adjacent, follow, approach \\
+\code{ego\_speed\_kmh} & [10, 90] \\
+\code{gap\_m} & [10, 80] \\
+\code{lead\_speed\_kmh} & [0, 90] ($\ge5$ pour braking, follow, approach) \\
+\code{lead\_brake\_t\_s} & [0, 20] \\
+\code{weather}, \code{town}, \code{seeds} & clear/rain/fog ; villes du Studio ; liste de graines \\
+\code{perception\_hz} & 20, 10 ou 5 \\
+\code{aeb} & bool\'een \\
+\code{faults} & ghost\_prob [0\,;0,2], ghost\_len [1\,;30], drop\_prob [0\,;0,9], noise\_sigma [0\,;2] \\
+\bottomrule\end{tabular}\end{center}
+Chaque sc\'enario a des valeurs par d\'efaut (par ex. \code{stopped} : \'ecart 50~m ; \code{braking} : \'ecart 45~m, cible 30~km/h, freinage \`a 1~s ; \code{follow} : \'ecart 15~m, cible \`a la vitesse de l'ego).
+
+\begin{choix}{trois niveaux de validation apr\`es le LLM}
+(1) \textbf{format} : champs connus, types, unit\'es, plages ; (2) \textbf{faisabilit\'e} : la route droite requise est compar\'ee \`a la route disponible dans la ville choisie ;
+(3) \textbf{reconstruction} d'un corps de requ\^ete pour l'API (\code{to\_studio\_payload}). Un mod\`ele peut se tromper de fa\c con plausible ; la v\'erification doit donc \^etre ind\'ependante du mod\`ele.
+Un refus est un r\'esultat valide : \emph{il vaut mieux refuser qu'ex\'ecuter un essai physiquement impossible}.
+\end{choix}
+
+\subsection{Convertisseurs compar\'es}
+\begin{itemize}
+\item \textbf{Baseline \`a r\`egles} (expressions r\'eguli\`eres, sans LLM) : reproductible, sert de plancher.
+\item \textbf{LLM} via un client pour API \og compatibles OpenAI \fg{} (biblioth\`eque standard uniquement ; Groq, OpenRouter, Ollama, Gemini ; r\'eessais sur 429/5xx ; \code{User-Agent} explicite car un pare-feu renvoyait une erreur 403 \og 1010 \fg{} sans en-t\^ete).
+      Temp\'erature 0, suppression des blocs \code{<think>}.
+\item Deux prompts : v1 (886 caract\`eres) et v2 (1\,300 caract\`eres, qui pr\'ecise que la vitesse donn\'ee est celle de l'ego).
+\end{itemize}
+Choix du fournisseur : une API gratuite (d\'ecision d'octobre 2026, apr\`es avoir envisag\'e d'abord le mod\`ele le plus puissant). Les limites gratuites de Groq relev\'ees (mod\`eles \code{openai/gpt-oss-120b}, \code{qwen/qwen3.8-27b} ; 30 requ\^etes/min, 1\,000/jour,
+8\,000 tokens/min, 200\,000 tokens/jour) proviennent de pages d'agr\'egateurs dat\'ees de mi-octobre 2026, \emph{pas d'une documentation officielle} : \`a rev\'erifier.
+
+\subsection{Jeu A (35 demandes) : r\'esultats}
+Jeu \code{reference/agent\_benchmark.jsonl} : 35 demandes en fran\c cais et en anglais, \textbf{dont 7 \`a refuser} (infaisables ou trop vagues), \'ecrit par moi. Un cas est correct si tous les champs coincident
+(tol\'erance de 0,5 pour les valeurs $\ge5$) ou si le refus attendu est produit.
+\begin{center}\small\begin{tabular}{@{}lc@{}}\toprule
+Convertisseur & Cas corrects sur 35 \\\midrule
+R\`egles (mots-cl\'es) & 23 (65,7\,\%), reproductible \\
+\code{openai/gpt-oss-120b} (Groq), prompt v1 & 33, puis 32 (deux passages) \\
+Idem, prompt v2 & 34, puis 33, 33, 32 (moyenne 32,7) \\
+\bottomrule\end{tabular}\end{center}
+\begin{honnete}
+Sur les sc\'enarios que le mod\`ele accepte, les champs sont exacts (aucune erreur d'unit\'e ni de valeur observ\'ee). Les \'echecs sont des \textbf{refus \`a tort} de demandes valides (4 cas selon le prompt)
+et, une fois, une demande vague accept\'ee. \`A temp\'erature 0, deux passages identiques ne donnent pas le m\^eme score : une diff\'erence de 1 \`a 2 cas sur 35 n'est pas une am\'elioration.
+Le prompt v2 corrige deux cas que j'avais formul\'es de fa\c con ambigu\"e et en casse deux de suivi : \textbf{aucun gain d\'emontr\'e} sur v1.
+Surtout, le prompt v2 a \'et\'e ajust\'e d'apr\`es les erreurs de ce jeu : ce n'est pas une mesure sur donn\'ees ind\'ependantes.
+\end{honnete}
+
+\subsection{Jeu B (26 demandes) : mesure \`a prompt fig\'e}
+Pour obtenir une mesure plus honn\^ete, un second jeu \code{reference/agent\_benchmark\_b.jsonl} a \'et\'e \'ecrit \emph{apr\`es} le gel du prompt v2 : 26 demandes (cat\'egories : familier, multi-param\`etres, unit\'es, d\'efauts, anglais,
+infaisable, ambigu), dont 7 \`a refuser. Les r\'eponses de r\'ef\'erence sont valid\'ees par le code (aucune r\'ef\'erence invalide ou infaisable) ; l'oracle obtient 26/26 et la baseline \`a r\`egles 9/26 (35\,\%).
+\textbf{Le score du LLM sur ce jeu n'est pas encore mesur\'e} (commande pr\'epar\'ee : \code{13\_agent\_eval.py --bench reference\textbackslash agent\_benchmark\_b.jsonl --repeat 3}, sans retoucher le prompt).
+Limite persistante : ce jeu est encore \'ecrit par moi ; un jeu C avec les formulations de l'auteur du projet est pr\'evu.
+
+\subsection{Int\'egration au Studio}
+\impl{} et \teste{} sans CARLA ni vrai LLM (tests avec un faux mod\`ele) :
+\begin{itemize}
+\item \code{GET /api/agent} : mode (\code{llm} ou \code{rules}), fournisseur, mod\`ele. Le LLM est utilis\'e si la variable d'environnement \code{LLM\_API\_KEY} existe c\^ot\'e \textbf{serveur} (ou si le fournisseur est Ollama, local) ; sinon repli sur les r\`egles, avec mention dans l'interface.
+\item \code{POST /api/agent/parse} : renvoie soit le sc\'enario normalis\'e et la route n\'ecessaire, soit un refus de type \code{rejet} (avec la raison donn\'ee par le mod\`ele), \code{invalide}, \code{infaisable} ou \code{json\_invalide}. Une erreur r\'eseau ou de quota renvoie 502. \textbf{Ne lance jamais de processus.}
+\item Interface : zone de texte, bouton \og Convertir \fg, r\'esultat lisible, bouton \og Appliquer au formulaire de campagne \fg{} ; l'utilisateur relit puis lance lui-m\^eme.
+\item La campagne du Studio accepte d\'esormais la carte (\code{town}), l'instant de freinage de la cible, la dur\'ee des fausses d\'etections, les pertes et le bruit.
+\end{itemize}
+\begin{choix}{l'agent propose, l'humain d\'ecide}
+Un LLM peut se tromper de fa\c con plausible. Le formulaire pr\'e-rempli est \textbf{relu et lanc\'e par l'utilisateur}. La cl\'e d'API n'est jamais lue depuis le navigateur ni \'ecrite dans un fichier du d\'ep\^ot :
+elle reste dans la variable d'environnement du terminal. (Deux cl\'es ont \'et\'e coll\'ees par erreur dans la conversation : elles doivent \^etre r\'evoqu\'ees.)
+\end{choix}
+\begin{limite}[Ce qui reste \`a faire sur l'agent]
+Pas de RAG, pas de LoRA, pas de boucle d'am\'elioration continue avec regroupement des erreurs en production ; un seul mod\`ele test\'e ; l'agent connaît un seul interlocuteur (sc\'enarios du Studio) ; le mode \og sans AEB \fg{} d'une campagne
+n'est pas g\'er\'e directement (le Studio lance l'AEB, et les t\'emoins si la case est coch\'ee). Ces \'el\'ements sont \plan.
+\end{limite}
+
+%=====================================================================
+\section{Tests automatiques}
+%=====================================================================
+64 tests passent hors CARLA sur ma copie de travail ; ils doivent \^etre relanc\'es par l'auteur sur sa machine (\code{python -m pytest -q tests}). R\'epartition par fichier :
+\begin{center}\small\begin{tabular}{@{}lp{11.2cm}@{}}\toprule
+Fichier & Contenu \\\midrule
+\code{test\_aeb.py} & machine d'\'etats, d\'ec\'el\'eration requise, hyst\'er\'esis, anticipation, non-r\'egression du freinage parasite \`a 5~Hz, garde en roue libre \\
+\code{test\_faults.py} & mod\`ele hors CARLA des fausses d\'etections (pr\'ediction des fr\'equences de freinage parasite) \\
+\code{test\_perception.py} & fusion, \code{ground\_depth}, rejet \\
+\code{test\_fusion\_lateral.py} & mesure lat\'erale par points LiDAR \\
+\code{test\_api.py} & runs, campagnes (commande construite, refus, suivi), agent (LLM simul\'e, refus, JSON illisible, infaisable, repli r\`egles, aucun \code{Popen}) \\
+\code{test\_agent.py} & sch\'ema, validation, faisabilit\'e, m\'etriques, baseline, client HTTP (faux serveur local), jeu B, prompts \\
+\bottomrule\end{tabular}\end{center}
+Les tests v\'erifient le \emph{code}, pas la physique : la physique se v\'erifie en CARLA (sections pr\'ec\'edentes).
+
+%=====================================================================
+\section{Registre des difficult\'es rencontr\'ees}
+%=====================================================================
+\begin{longtable}{@{}p{4.2cm}p{4.8cm}p{5.8cm}@{}}\toprule
+Probl\`eme & Cause & Solution / enseignement \\\midrule\endhead
+Freinage parasite \`a 5~Hz (graine 43) & a priori de vitesse lat\'erale initiale trop large (8~m/s) & \'ecart-type 2~m/s ; garde \code{escalate\_max\_misses}=2 ; test de non-r\'egression \\
+Garde de tol\'erance 0 & les pistes de 1 image sans mesure sont l\'egitimes \`a 5~Hz avec pertes & tol\'erance 2 ; 0 donnait +9 collisions sur 40 \\
+Fausses d\'etections de 1--3 images & confirmation trop courte & confirmation 0,15~s ; mod\`ele hors CARLA pr\'edit puis CARLA mesure \\
+Rel\^achement du frein trop t\^ot & $a_{req}$ oscille autour du seuil & hyst\'er\'esis 0,7 ; maintien proche d'un obstacle \\
+Collision \`a 5~Hz sans correction & latence r\'eelle sup\'erieure \`a celle suppos\'ee & latence tenant compte de la fr\'equence ; valid\'ee sur cible arr\^et\'ee seulement \\
+\code{PermissionError} sur \code{status.json} & lecteur (navigateur) ouvre le fichier pendant le renommage & \code{replace\_retry} ; fichiers non critiques saut\'es \\
+Route trop courte (110~m requis, 95~m dispos) & scénario choisi sans calcul pr\'ealable & formules de longueur, indication dans l'UI, refus avant lancement \\
+Plantage de CARLA \`a Town03 & \code{-quality-level=Low} : \og shader compilation \fg & CARLA sans option ; cause non \'elucid\'ee ; ne pas m\'elanger les qualit\'es \\
+Test qui lan\c cait une vraie campagne & CARLA joignable lors des tests & \'etat CARLA simul\'e, garde sur \code{Popen} \\
+Cas \og cible 30~km/h, \'ecart 20~m \fg & physiquement inatteignable (4,8 > 4,1~m/s$^2$) & exclu des tableaux ; variantes valid\'ees \\
+Erreur HTTP 403 \og 1010 \fg{} (Groq) & absence de \code{User-Agent} & en-t\^ete explicite ; test ajout\'e \\
+Cl\'es d'API coll\'ees dans le chat & erreur d'usage & r\'evocation ; variable d'environnement du terminal uniquement \\
+Fichiers non \'ecrits sur le disque via le pont & \'ecriture silencieuse sans effet & v\'erification syst\'ematique des tailles apr\`es \'ecriture \\
+Scores LLM non reproductibles & temp\'erature 0 non d\'eterministe c\^ot\'e API & r\'ep\'etitions, moyenne, pas de conclusion sur 1--2 cas \\
+\bottomrule\end{longtable}
+
+%=====================================================================
+\section{Limites et affirmations \`a ne pas faire}
+%=====================================================================
+\begin{limite}[Limites g\'en\'erales]
+\begin{itemize}
+\item \textbf{Simulation uniquement} ; deux villes ; 2 \`a 6 graines. Ces essais montrent un comportement ; ils ne constituent ni une validation statistique ni une homologation.
+\item Le LiDAR CARLA n'est pas d\'egrad\'e par la pluie ni le brouillard : l'axe m\'et\'eo ne teste que la cam\'era.
+\item Mod\`eles de v\'ehicules identiques entre entra\^inement et test ; baseline cam\'era seule na\"ive (hauteur fixe 1,5~m) ; pas de trafic dense dans les essais AEB.
+\item Banc de test maison : conducteur et r\'egulateur de l'ego \'ecrits pour l'essai.
+\item L'AEB est valid\'e \`a 20~Hz. \`A 5~Hz et 70~km/h, la marge est mince : \'ecart minimal $\approx2{,}4$~m sur 16 lancements sans collision, mais \textbf{une collision} (impact 16~km/h) observ\'ee une fois sur la graine 42
+      dans un autre lot, non reproduite, cause non \'elucid\'ee (variabilit\'e du simulateur ou marge insuffisante).
+\item Fausse d\'etection de 4 images ou plus : l'AEB freine toujours (non mesur\'e en CARLA).
+\item Les freinages parasites ne sont mesur\'es que sur trois sc\'enarios simples.
+\item L'agent : jeu de test \'ecrit par moi, prompt ajust\'e dessus, un seul mod\`ele LLM.
+\end{itemize}
+\end{limite}
+\textbf{Affirmations \`a ne pas faire} (par exemple dans un CV ou un entretien) :
+\begin{itemize}
+\item \og Le LiDAR est plus pr\'ecis que la baseline cam\'era \fg{} (faux \`a Town10 en MAE moyenne).
+\item \og 0 collision \`a 5~Hz et 70~km/h \fg{} (une collision observ\'ee).
+\item \og L'AEB est valid\'e / homologu\'e \fg{} (calibr\'e sur une voiture simul\'ee, seuils de d\'epart).
+\item \og Le d\'etecteur g\'en\'eralise \fg{} \`a des images r\'eelles ou \`a une ville dont l'absence de fuite d'entra\^inement n'est pas confirm\'ee.
+\item \og L'agent LLM atteint X\,\% \fg{} sans pr\'eciser qu'il s'agit d'un jeu \'ecrit par moi, avec un prompt ajust\'e sur lui ; un score sur le jeu B ou un jeu C ind\'ependant n'existe pas encore.
+\end{itemize}
+Formulations d\'efendables : \emph{\og Pipeline LiDAR--cam\'era avec AEB valid\'e en boucle ferm\'ee dans CARLA sur deux villes, avec analyse d'erreurs et corrections document\'ees \fg} ; \emph{\og Agent de conversion langage naturel $\rightarrow$ sc\'enario JSON
+avec validation d\'eterministe, \'evalu\'e sur un jeu de demandes avec baseline \`a r\`egles \fg}.
+
+%=====================================================================
+\section{Perspectives}
+%=====================================================================
+\begin{tabular}{@{}p{5cm}p{10cm}@{}}\toprule
+\plan & Contenu \\\midrule
+Mesure du jeu B & lancer le LLM sur 26 demandes, prompt fig\'e, 3 passages \\
+Jeu C ind\'ependant & phrases \'ecrites par l'auteur, r\'eponses attendues corrig\'ees par lui \\
+Comparaison Ollama local & mod\`ele de 7--8 milliards de param\`etres quantifi\'e (faisable sur 6~Go de VRAM) : justifierait ou non un LoRA / un RAG \\
+RAG et LoRA & seulement si le jeu ind\'ependant montre une marge que le prompt ne comble pas \\
+Am\'elioration continue & regroupement des erreurs de l'agent (cat\'egories d\'ej\`a produites par les m\'etriques) puis correction mesur\'ee \\
+Validation de l'interface & campagne r\'eelle lanc\'ee depuis la page, comparaison \`a la ligne de commande \\
+Perception & mesure de la persistance r\'eelle des fausses d\'etections du d\'etecteur ; trafic dense ; LiDAR d\'egrad\'e par la m\'et\'eo \\
+AEB & d\'efense contre les fausses d\'etections de 4 images ou plus ; marge \`a 5~Hz et 70~km/h \\
+\bottomrule\end{tabular}
+
+%=====================================================================
+\appendix
+\section{Reproduire}
+%=====================================================================
+\begin{lstlisting}
+python -m venv venv ; venv\Scripts\activate
+pip install -r requirements.txt       # + wheel CARLA (non installable depuis PyPI)
+# serveur CARLA lance (sans -quality-level=Low pour Town03)
+python scripts\01_collect.py
+python -m pytest -q tests             # sans CARLA
+python scripts\12_aeb_campaign.py --scenario stopped --speeds 30 50 70 --weathers clear --seeds 42 43 44 45
+python -m uvicorn app.main:app --app-dir backend --port 8000     # Studio sur http://localhost:8000
+
+# Agent (la cle reste dans le terminal, jamais dans un fichier du depot)
+$env:LLM_API_KEY = Read-Host "cle"
+$env:AGENT_PROVIDER = "groq"
+python scripts\13_agent_eval.py --model openai --provider groq --llm openai/gpt-oss-120b `
+   --sleep 6 --prompt v2 --bench reference\agent_benchmark_b.jsonl --repeat 3
+\end{lstlisting}
+Les r\'esultats de r\'ef\'erence sont dans \code{reference/} (CSV de fusion, d'\'evaluation du d\'etecteur et des campagnes, empreinte du mod\`ele, jeux de l'agent). Variables du serveur pour l'agent :
+\code{LLM\_API\_KEY}, \code{AGENT\_PROVIDER}, \code{AGENT\_MODEL}, \code{AGENT\_BASE\_URL}, \code{AGENT\_PROMPT}.
+
+\section{Glossaire}
+\begin{description}[leftmargin=3cm,labelwidth=2.8cm,style=nextline]
+\item[ADAS] Advanced Driver Assistance Systems, aides \`a la conduite.
+\item[AEB] Autonomous Emergency Braking, freinage d'urgence automatique.
+\item[TTC] Time To Collision, temps avant collision $=x/v_c$.
+\item[$a_{req}$] D\'ec\'el\'eration requise pour s'arr\^eter avant l'obstacle, latence comprise.
+\item[Boucle ferm\'ee] La commande de l'ego modifie ce que les capteurs per\c coivent ensuite (par opposition \`a un rejeu de donn\'ees).
+\item[SIL] Software-In-the-Loop : le logiciel \`a tester tourne dans un simulateur.
+\item[Fusion tardive] Les capteurs sont combin\'es apr\`es la d\'etection d'objets, pas au niveau des donn\'ees brutes.
+\item[MAE] Erreur absolue moyenne.
+\item[Graine] Entier qui fixe les al\'eas (trajectoire, trafic) pour rendre un essai reproductible.
+\item[RAG / LoRA] R\'ecup\'eration de documents ajout\'es au prompt / adaptation l\'eg\`ere des poids d'un mod\`ele ; \plan{} dans ce projet.
+\end{description}
+
+\end{document}
